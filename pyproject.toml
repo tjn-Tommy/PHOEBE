@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phoebe"
+version = "0.1.0"
+description = "Unified lab-instrument control platform (SLM / OSA / Scope / DAQ / AWG) per refactor.md v2"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "numpy>=1.26",
+    "h5py>=3.10",
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+visa = ["pyvisa", "pyvisa-py"]
+daq = ["nidaqmx"]
+parquet = ["pyarrow>=14"]
+ui = ["PySide6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+include = ["phoebe*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

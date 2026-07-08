@@ -1,0 +1,84 @@
+# PHOEBE sim configuration: full offline loop (SLM + OSA + scope + DAQ + AWG).
+# Switch any instrument to the real device by setting backend = "real" and
+# filling in its connection details.
+
+mode = "dev"
+dispatch_policy = "reject"
+
+[storage]
+runs_root = "runs"
+
+[[instruments]]
+instrument_id = "slm.primary"
+kind = "pattern_modulator"
+vendor = "santec"
+model = "slm-200"
+role = "primary_slm"
+backend = "sim"
+  [instruments.connection]
+  transport = "vendor_dll"
+  dll_path = "C:/santec/SLM_DLL/SLMFunc.dll"
+  device_index = 0
+  [instruments.options]
+  settle_ms = 5.0
+  lut_id = "slm200_phase_lut_2026q2"
+  height = 1200
+  width = 1920
+  levels = 1024
+
+[[instruments]]
+instrument_id = "osa.main"
+kind = "spectrum_analyzer"
+vendor = "yokogawa"
+model = "aq6370"
+role = "main_osa"
+backend = "sim"
+  [instruments.connection]
+  transport = "tcp"
+  host = "192.168.1.11"
+  port = 10001
+  timeout_s = 30.0
+
+[[instruments]]
+instrument_id = "scope.rto6"
+kind = "oscilloscope"
+vendor = "rohde-schwarz"
+model = "rto6"
+role = "main_scope"
+backend = "sim"
+  [instruments.connection]
+  transport = "visa"
+  resource_name = "TCPIP::192.168.1.2::hislip0::INSTR"
+  timeout_s = 30.0
+
+[[instruments]]
+instrument_id = "daq.dev1"
+kind = "analog_input"
+vendor = "ni"
+model = "usb-6251"
+role = "encoder_daq"
+backend = "sim"
+  [instruments.connection]
+  transport = "sdk"
+  device = "Dev1"
+
+[[instruments]]
+instrument_id = "awg.main"
+kind = "waveform_generator"
+vendor = "tektronix"
+model = "awg5204"
+role = "main_awg"
+backend = "sim"
+  [instruments.connection]
+  transport = "visa"
+  resource_name = "TCPIP::192.168.1.20::inst0::INSTR"
+  timeout_s = 30.0
+
+# Parameter-name → role bindings per plugin (DI disambiguation, §7.2)
+[plugins."org.lab.tpa_multiplier".bindings]
+slm = "primary_slm"
+osa = "main_osa"
+
+[plugins."org.lab.spectrum_grid".bindings]
+slm = "primary_slm"
+osa = "main_osa"

@@ -1,0 +1,10 @@
+__pycache__
+awg5204/
+TPA_experiment/
+*.pyc
+.pytest_cache/
+runs/
+*.egg-info/
+build/
+dist/
+.venv/
