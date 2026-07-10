@@ -1,4 +1,6 @@
-# PHOEBE — 统一实验控制平台
+# PHOEBE 
+
+**P**hotonic **H**ardware **O**rchestrator for **E**xtensible **B**enchtop **E**xperiments
 
 按 [refactor.md](refactor.md) v2 架构实现的实验室仪器统一控制平台，整合了原先独立的两套代码库：
 
@@ -10,8 +12,9 @@
 ## 快速开始（离线仿真，无需任何硬件）
 
 ```powershell
-pip install -e .[dev]          # 或直接: pip install pydantic numpy h5py loguru
-python examples/run_sim_demo.py
+pip install -e .[dev,ui]       # 核心: pydantic numpy h5py loguru; UI: PyQt5 pyqtgraph
+python examples/run_sim_demo.py            # 无 UI 的命令行演示
+python -m phoebe.ui.app --config config/sim.toml   # PyQt5 图形界面
 python -m pytest tests/ -q     # 35 项测试，含 L4 全链路仿真闭环
 ```
 
@@ -41,7 +44,9 @@ python -m pytest tests/ -q     # 35 项测试，含 L4 全链路仿真闭环
 | `phoebe/instruments/sim/` | 共享 `SimContext` 的物理仿真后端 | §14.2 |
 | `phoebe/plugins/` | 实验插件（TPA 寻优、grid scan） | §11 |
 | `phoebe/app/bootstrap.py` | 组合根 + 专用 loop 线程 | §16, §12.1 |
-| `phoebe/ui/bridge.py` | Qt 事件桥（懒加载 PySide6） | §12.5 |
+| `phoebe/ui/bridge.py` | Qt 事件桥（PyQt5，跨线程 Signal） | §12.5 |
+| `phoebe/ui/main_window.py` | 设备面板 / 运行控制 / pyqtgraph 实时绘图 / 事件日志 | §13.2 |
+| `phoebe/ui/app.py` | UI 入口：Qt 主线程 + phoebe loop 线程 | §12.1 |
 
 ## 迁移映射
 
@@ -57,7 +62,7 @@ python -m pytest tests/ -q     # 35 项测试，含 L4 全链路仿真闭环
 
 ### 尚未迁移（有意留待后续）
 
-- **两个旧 GUI**（`awg5204/awg5204_tm/ui`、`TPA_experiment/src/slm_module/gui/app.py`）：属 Phase 3；新平台已提供 Gateway + EventBus + `UiEventBridge` 契约，Panel 只需「表单 → Config → send_command」+「订阅事件刷新」。
+- **两个旧 GUI 的完整功能**（`awg5204/awg5204_tm/ui`、`TPA_experiment/src/slm_module/gui/app.py`）：新平台已提供 PyQt5 UI Shell（设备健康、TPA/GridScan 启动表单、pause/resume/cancel、实时光谱/指标绘图、事件日志）；旧 GUI 中的专项页面（标定、编码分析等）应随其对应插件逐个移植为新 Panel——「表单 → Config → send_command」+「订阅事件刷新」。
 - **深度分析/优化代码**（`optimization.py`、`tpa_phase.py`、`calibration_new.py`、`analysis.py` 等）：属实验域逻辑，应按需逐个移植为插件（模式见 `tpa_multiplier.py`，子流程复用见 §11.3 lease 继承）。
 - **L2 真机会话录制**：`TranscriptReplayTransport` 已就绪，需在真机上录制后加入回归。
 
