@@ -7,7 +7,8 @@ Pydantic where ndarrays are involved.
 """
 from __future__ import annotations
 
-from typing import Annotated, Sequence
+from typing import Annotated
+from collections.abc import Sequence
 
 import numpy as np
 from pydantic import Field
@@ -77,7 +78,8 @@ def make_x_segments(spec: PatternSpec,
     if not segments:
         raise ValueError("segments must not be empty")
     ordered = sorted(segments, key=lambda s: s[0])
-    for (a_start, a_end, _), (b_start, b_end, _) in zip(ordered, ordered[1:]):
+    for (a_start, a_end, _), (b_start, b_end, _) in zip(ordered, ordered[1:],
+                                                        strict=False):
         if b_start < a_end:
             raise ValueError(f"segments overlap: [{a_start},{a_end}) and [{b_start},{b_end})")
     frame = np.full((spec.height, spec.width), background_level, dtype=np.uint16)

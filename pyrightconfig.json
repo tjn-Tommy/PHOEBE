@@ -1,0 +1,8 @@
+{
+    "include": ["phoebe/contracts", "phoebe/core", "phoebe/domain", "phoebe/services"],
+    "exclude": ["**/__pycache__"],
+    "typeCheckingMode": "basic",
+    "pythonVersion": "3.11",
+    "reportMissingImports": "warning",
+    "reportAttributeAccessIssue": "warning"
+}

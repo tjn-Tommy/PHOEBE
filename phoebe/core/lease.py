@@ -95,8 +95,8 @@ class LeaseSet:
         ]
 
     @staticmethod
-    def merge(parent: "LeaseSet | None", granted: "list[Lease]",
-              *, now_mono: float) -> "LeaseSet":
+    def merge(parent: LeaseSet | None, granted: list[Lease],
+              *, now_mono: float) -> LeaseSet:
         """View combining inherited parent leases with newly granted ones.
 
         The returned set SHARES the parent's slots (refcounts are common), so

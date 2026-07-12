@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gates:
+    name: gates (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (core + dev + parquet; no VISA / DAQ / Qt needed)
+        run: python -m pip install -e .[dev,parquet]
+
+      - name: Lint (ruff)
+        run: ruff check phoebe tests examples tools
+
+      - name: Types (pyright — contracts/core/domain/services scope, basic mode)
+        run: pyright
+
+      - name: Architecture contracts (import-linter)
+        run: lint-imports
+
+      - name: Contract schema drift (plan C-5)
+        run: python -m phoebe.contracts.export --check
+
+      - name: TypeScript codegen drift (sample consumer)
+        run: python tools/gen_ts_types.py --check
+
+      - name: Tests (offline sim suite — the L4 gate)
+        run: python -m pytest tests/ -q
+
+      - name: Headless end-to-end demo
+        run: python examples/run_sim_demo.py

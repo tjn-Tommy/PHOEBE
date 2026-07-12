@@ -1,0 +1,1601 @@
+{
+  "$defs": {
+    "AckCode": {
+      "description": "Stable dispatch/ack vocabulary (plan §6.4).  Values are part of the\nserialized contract — never rename them.",
+      "enum": [
+        "accepted",
+        "queued",
+        "replayed",
+        "unknown_command",
+        "invalid_payload",
+        "command_id_conflict",
+        "maintenance_mode",
+        "plugin_api_incompatible",
+        "missing_role",
+        "kind_mismatch",
+        "health_stale",
+        "device_not_ready",
+        "calibration_expired",
+        "device_busy",
+        "unknown_task",
+        "invalid_state",
+        "internal_error"
+      ],
+      "title": "AckCode",
+      "type": "string"
+    },
+    "AdmissionDecision": {
+      "additionalProperties": false,
+      "description": "Outcome of one admission-chain traversal (plan §6.4): a stable code\nplus human detail.  ``task_id`` is set when a run was created/queued.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/AckCode"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "AdmissionDecision",
+      "type": "object"
+    },
+    "CommandAck": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "code": {
+          "$ref": "#/$defs/AckCode"
+        },
+        "command_id": {
+          "title": "Command Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "queued": {
+          "default": false,
+          "title": "Queued",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "command_id",
+        "accepted",
+        "code"
+      ],
+      "title": "CommandAck",
+      "type": "object"
+    },
+    "CommandEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "command_id": {
+          "title": "Command Id",
+          "type": "string"
+        },
+        "issued_by": {
+          "default": "local_ui",
+          "title": "Issued By",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "command"
+      ],
+      "title": "CommandEnvelope",
+      "type": "object"
+    },
+    "ControllerStats": {
+      "additionalProperties": false,
+      "description": "Operational state for device panels / the future API (plan §3.1 A2).",
+      "properties": {
+        "instrument_id": {
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "ops_failed": {
+          "default": 0,
+          "title": "Ops Failed",
+          "type": "integer"
+        },
+        "ops_ok": {
+          "default": 0,
+          "title": "Ops Ok",
+          "type": "integer"
+        },
+        "recent_errors": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Recent Errors",
+          "type": "array"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "started_at"
+      ],
+      "title": "ControllerStats",
+      "type": "object"
+    },
+    "DataPointer": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset": {
+          "title": "Dataset",
+          "type": "string"
+        },
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "dataset",
+        "index"
+      ],
+      "title": "DataPointer",
+      "type": "object"
+    },
+    "DataPointerEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset": {
+          "title": "Dataset",
+          "type": "string"
+        },
+        "event_type": {
+          "const": "data_pointer",
+          "default": "data_pointer",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "image": "#/$defs/ImageThumbnail",
+                  "scalar_series": "#/$defs/ScalarSeries",
+                  "spectrum": "#/$defs/SpectrumPreview",
+                  "waveform": "#/$defs/WaveformPreview"
+                },
+                "propertyName": "preview_type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/SpectrumPreview"
+                },
+                {
+                  "$ref": "#/$defs/WaveformPreview"
+                },
+                {
+                  "$ref": "#/$defs/ImageThumbnail"
+                },
+                {
+                  "$ref": "#/$defs/ScalarSeries"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preview"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "t_wall",
+        "t_mono_ns",
+        "run_id",
+        "dataset",
+        "index"
+      ],
+      "title": "DataPointerEvent",
+      "type": "object"
+    },
+    "DeviceHealth": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "degraded",
+            "error",
+            "offline"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "DeviceHealth",
+      "type": "object"
+    },
+    "DeviceHealthEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "event_type": {
+          "const": "device_health",
+          "default": "device_health",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "instrument_id": {
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "schema_version": {
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "degraded",
+            "error",
+            "offline"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "t_wall",
+        "t_mono_ns",
+        "instrument_id",
+        "status"
+      ],
+      "title": "DeviceHealthEvent",
+      "type": "object"
+    },
+    "DeviceIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "firmware": {
+          "default": "",
+          "title": "Firmware",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "raw": {
+          "default": "",
+          "title": "Raw",
+          "type": "string"
+        },
+        "serial": {
+          "default": "",
+          "title": "Serial",
+          "type": "string"
+        },
+        "vendor": {
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "vendor",
+        "model"
+      ],
+      "title": "DeviceIdentity",
+      "type": "object"
+    },
+    "DeviceStatusView": {
+      "additionalProperties": false,
+      "description": "One device-table row for panels/clients: static config + live\nlifecycle + operational stats, assembled by the device service.",
+      "properties": {
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "instrument_id": {
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "lifecycle": {
+          "title": "Lifecycle",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControllerStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "vendor": {
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "kind",
+        "vendor",
+        "model",
+        "role",
+        "backend",
+        "lifecycle"
+      ],
+      "title": "DeviceStatusView",
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Stable machine-readable error classes for the wire (plan §6.4).\n\nValues are part of the serialized contract — never rename them.",
+      "enum": [
+        "connection",
+        "timeout",
+        "protocol",
+        "device_reported",
+        "invalid_state",
+        "safety",
+        "unsupported_capability",
+        "contract",
+        "unsupported_model",
+        "lease_unavailable",
+        "device_not_ready",
+        "cancelled",
+        "bus_overflow",
+        "writer_failed",
+        "config",
+        "internal"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "ErrorEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "default": "internal"
+        },
+        "error_type": {
+          "title": "Error Type",
+          "type": "string"
+        },
+        "event_type": {
+          "const": "error",
+          "default": "error",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "instrument_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument Id"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "t_wall",
+        "t_mono_ns",
+        "error_type",
+        "message"
+      ],
+      "title": "ErrorEvent",
+      "type": "object"
+    },
+    "ErrorInfo": {
+      "additionalProperties": false,
+      "description": "Structured error attached to acks and events (plan §6.4): clients read\n``code`` and ``instrument_id``; ``message`` is human detail only.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "error_type": {
+          "default": "",
+          "title": "Error Type",
+          "type": "string"
+        },
+        "instrument_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument Id"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorInfo",
+      "type": "object"
+    },
+    "EventBusStats": {
+      "additionalProperties": false,
+      "description": "Bus health counters (plan §6.5): published to diagnostics consumers\ninstead of living only in process memory.",
+      "properties": {
+        "current_seq": {
+          "title": "Current Seq",
+          "type": "integer"
+        },
+        "failed_subscriptions": {
+          "title": "Failed Subscriptions",
+          "type": "integer"
+        },
+        "oversize_dropped": {
+          "title": "Oversize Dropped",
+          "type": "integer"
+        },
+        "subscriber_count": {
+          "title": "Subscriber Count",
+          "type": "integer"
+        },
+        "total_dropped": {
+          "title": "Total Dropped",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "current_seq",
+        "total_dropped",
+        "oversize_dropped",
+        "failed_subscriptions",
+        "subscriber_count"
+      ],
+      "title": "EventBusStats",
+      "type": "object"
+    },
+    "ImageThumbnail": {
+      "additionalProperties": false,
+      "description": "Tiny raster thumbnail (SLM mask, camera frame); PNG, base64-encoded.\nThe length cap keeps the event under the bus byte ceiling.",
+      "properties": {
+        "height": {
+          "maximum": 512,
+          "minimum": 1,
+          "title": "Height",
+          "type": "integer"
+        },
+        "png_base64": {
+          "maxLength": 48000,
+          "title": "Png Base64",
+          "type": "string"
+        },
+        "preview_type": {
+          "const": "image",
+          "default": "image",
+          "title": "Preview Type",
+          "type": "string"
+        },
+        "width": {
+          "maximum": 512,
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "png_base64"
+      ],
+      "title": "ImageThumbnail",
+      "type": "object"
+    },
+    "InstrumentDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "instrument_id": {
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "provides": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Provides",
+          "type": "array"
+        },
+        "vendor": {
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "kind",
+        "vendor",
+        "model",
+        "provides"
+      ],
+      "title": "InstrumentDescriptor",
+      "type": "object"
+    },
+    "InstrumentSnapshot": {
+      "additionalProperties": false,
+      "description": "Settings snapshot for pre/post-run baselines (refactor.md §10.5).",
+      "properties": {
+        "instrument_id": {
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "taken_at": {
+          "format": "date-time",
+          "title": "Taken At",
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instrument_id"
+      ],
+      "title": "InstrumentSnapshot",
+      "type": "object"
+    },
+    "JournalRecordType": {
+      "description": "Lifecycle facts, in causal order (plan §6.2).  ``RECOVERED`` is\nappended by the startup scan when a journal ends without ``FINALIZED``.",
+      "enum": [
+        "admitted",
+        "run_dir_created",
+        "baseline_captured",
+        "staged",
+        "execution_started",
+        "execution_outcome",
+        "cleanup_started",
+        "writer_closed",
+        "leases_released",
+        "finalized",
+        "recovered"
+      ],
+      "title": "JournalRecordType",
+      "type": "string"
+    },
+    "LogEvent": {
+      "additionalProperties": false,
+      "description": "Short log excerpt for live UI consoles (full log goes to experiment.jsonl).",
+      "properties": {
+        "event_type": {
+          "const": "log",
+          "default": "log",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "level": {
+          "default": "info",
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 2000,
+          "title": "Message",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "t_wall",
+        "t_mono_ns",
+        "message"
+      ],
+      "title": "LogEvent",
+      "type": "object"
+    },
+    "ProgressEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_type": {
+          "const": "progress",
+          "default": "progress",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "schema_version": {
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "step": {
+          "title": "Step",
+          "type": "integer"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        }
+      },
+      "required": [
+        "t_wall",
+        "t_mono_ns",
+        "step"
+      ],
+      "title": "ProgressEvent",
+      "type": "object"
+    },
+    "RecoveryReport": {
+      "additionalProperties": false,
+      "description": "One incomplete run explained by the startup scan (plan §6.2): what the\njournal proves happened, and what the operator should conclude.",
+      "properties": {
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        },
+        "last_record": {
+          "$ref": "#/$defs/JournalRecordType"
+        },
+        "resolution": {
+          "enum": [
+            "interrupted",
+            "operator_review_required"
+          ],
+          "title": "Resolution",
+          "type": "string"
+        },
+        "run_dir": {
+          "title": "Run Dir",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "run_dir",
+        "last_record",
+        "resolution",
+        "explanation"
+      ],
+      "title": "RecoveryReport",
+      "type": "object"
+    },
+    "RunJournalRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "finalized": {
+          "anyOf": [
+            {
+              "enum": [
+                "ok",
+                "degraded"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finalized"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "completed",
+                "failed",
+                "aborted"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome"
+        },
+        "record": {
+          "$ref": "#/$defs/JournalRecordType"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "enum": [
+                "interrupted",
+                "operator_review_required"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolution"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "task_id",
+        "run_id",
+        "t_wall",
+        "t_mono_ns"
+      ],
+      "title": "RunJournalRecord",
+      "type": "object"
+    },
+    "RunManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "app_config_hash": {
+          "default": "",
+          "title": "App Config Hash",
+          "type": "string"
+        },
+        "code_version": {
+          "default": "",
+          "title": "Code Version",
+          "type": "string"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "config_hash": {
+          "title": "Config Hash",
+          "type": "string"
+        },
+        "config_json": {
+          "title": "Config Json",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "git_commit": {
+          "default": "",
+          "title": "Git Commit",
+          "type": "string"
+        },
+        "git_dirty": {
+          "default": false,
+          "title": "Git Dirty",
+          "type": "boolean"
+        },
+        "instruments": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Instruments",
+          "type": "object"
+        },
+        "plugin_id": {
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "plugin_id",
+        "command",
+        "created_at",
+        "config_json",
+        "config_hash"
+      ],
+      "title": "RunManifest",
+      "type": "object"
+    },
+    "RunResult": {
+      "additionalProperties": false,
+      "description": "Catalog row: one line per run, queryable without opening run dirs.\n``state`` is the last known interactive state or a recovery resolution.",
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "execution_outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "completed",
+                "failed",
+                "aborted"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Outcome"
+        },
+        "finalized": {
+          "anyOf": [
+            {
+              "enum": [
+                "ok",
+                "degraded"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finalized"
+        },
+        "plugin_id": {
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "run_dir": {
+          "title": "Run Dir",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "plugin_id",
+        "command",
+        "created_at",
+        "run_dir",
+        "state"
+      ],
+      "title": "RunResult",
+      "type": "object"
+    },
+    "RunState": {
+      "enum": [
+        "queued",
+        "preparing",
+        "running",
+        "pausing",
+        "paused",
+        "stopping",
+        "finalizing",
+        "completed",
+        "failed",
+        "aborted"
+      ],
+      "title": "RunState",
+      "type": "string"
+    },
+    "RunStateEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_type": {
+          "const": "run_state",
+          "default": "run_state",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "final": {
+          "default": false,
+          "title": "Final",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "schema_version": {
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/RunState"
+        },
+        "t_mono_ns": {
+          "title": "T Mono Ns",
+          "type": "integer"
+        },
+        "t_wall": {
+          "format": "date-time",
+          "title": "T Wall",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "t_wall",
+        "t_mono_ns",
+        "state"
+      ],
+      "title": "RunStateEvent",
+      "type": "object"
+    },
+    "ScalarSeries": {
+      "additionalProperties": false,
+      "description": "Named scalar-vs-x series (optimizer metric history, power monitor).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "preview_type": {
+          "const": "scalar_series",
+          "default": "scalar_series",
+          "title": "Preview Type",
+          "type": "string"
+        },
+        "x": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 256,
+          "title": "X",
+          "type": "array"
+        },
+        "y": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 256,
+          "title": "Y",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "x",
+        "y"
+      ],
+      "title": "ScalarSeries",
+      "type": "object"
+    },
+    "SpectrumPreview": {
+      "additionalProperties": false,
+      "description": "Down-sampled preview small enough for the bus; cap is part of the schema.",
+      "properties": {
+        "preview_type": {
+          "const": "spectrum",
+          "default": "spectrum",
+          "title": "Preview Type",
+          "type": "string"
+        },
+        "x_nm": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 256,
+          "title": "X Nm",
+          "type": "array"
+        },
+        "y_dbm": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 256,
+          "title": "Y Dbm",
+          "type": "array"
+        }
+      },
+      "required": [
+        "x_nm",
+        "y_dbm"
+      ],
+      "title": "SpectrumPreview",
+      "type": "object"
+    },
+    "WaveformPreview": {
+      "additionalProperties": false,
+      "description": "Time-domain preview (scope/DAQ channels).",
+      "properties": {
+        "preview_type": {
+          "const": "waveform",
+          "default": "waveform",
+          "title": "Preview Type",
+          "type": "string"
+        },
+        "t_s": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 256,
+          "title": "T S",
+          "type": "array"
+        },
+        "y": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 256,
+          "title": "Y",
+          "type": "array"
+        },
+        "y_unit": {
+          "default": "V",
+          "title": "Y Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "t_s",
+        "y"
+      ],
+      "title": "WaveformPreview",
+      "type": "object"
+    }
+  },
+  "bundle_format": 1,
+  "contracts_version": 2,
+  "roots": {
+    "AdmissionDecision": {
+      "$ref": "#/$defs/AdmissionDecision"
+    },
+    "CommandAck": {
+      "$ref": "#/$defs/CommandAck"
+    },
+    "CommandEnvelope": {
+      "$ref": "#/$defs/CommandEnvelope"
+    },
+    "ControllerStats": {
+      "$ref": "#/$defs/ControllerStats"
+    },
+    "DataPointer": {
+      "$ref": "#/$defs/DataPointer"
+    },
+    "DeviceHealth": {
+      "$ref": "#/$defs/DeviceHealth"
+    },
+    "DeviceIdentity": {
+      "$ref": "#/$defs/DeviceIdentity"
+    },
+    "DeviceStatusView": {
+      "$ref": "#/$defs/DeviceStatusView"
+    },
+    "ErrorInfo": {
+      "$ref": "#/$defs/ErrorInfo"
+    },
+    "EventBusStats": {
+      "$ref": "#/$defs/EventBusStats"
+    },
+    "GatewayEvent": {
+      "discriminator": {
+        "mapping": {
+          "data_pointer": "#/$defs/DataPointerEvent",
+          "device_health": "#/$defs/DeviceHealthEvent",
+          "error": "#/$defs/ErrorEvent",
+          "log": "#/$defs/LogEvent",
+          "progress": "#/$defs/ProgressEvent",
+          "run_state": "#/$defs/RunStateEvent"
+        },
+        "propertyName": "event_type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DataPointerEvent"
+        },
+        {
+          "$ref": "#/$defs/ProgressEvent"
+        },
+        {
+          "$ref": "#/$defs/RunStateEvent"
+        },
+        {
+          "$ref": "#/$defs/DeviceHealthEvent"
+        },
+        {
+          "$ref": "#/$defs/ErrorEvent"
+        },
+        {
+          "$ref": "#/$defs/LogEvent"
+        }
+      ]
+    },
+    "InstrumentDescriptor": {
+      "$ref": "#/$defs/InstrumentDescriptor"
+    },
+    "InstrumentSnapshot": {
+      "$ref": "#/$defs/InstrumentSnapshot"
+    },
+    "PreviewPayload": {
+      "discriminator": {
+        "mapping": {
+          "image": "#/$defs/ImageThumbnail",
+          "scalar_series": "#/$defs/ScalarSeries",
+          "spectrum": "#/$defs/SpectrumPreview",
+          "waveform": "#/$defs/WaveformPreview"
+        },
+        "propertyName": "preview_type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SpectrumPreview"
+        },
+        {
+          "$ref": "#/$defs/WaveformPreview"
+        },
+        {
+          "$ref": "#/$defs/ImageThumbnail"
+        },
+        {
+          "$ref": "#/$defs/ScalarSeries"
+        }
+      ]
+    },
+    "RecoveryReport": {
+      "$ref": "#/$defs/RecoveryReport"
+    },
+    "RunJournalRecord": {
+      "$ref": "#/$defs/RunJournalRecord"
+    },
+    "RunManifest": {
+      "$ref": "#/$defs/RunManifest"
+    },
+    "RunResult": {
+      "$ref": "#/$defs/RunResult"
+    }
+  }
+}

@@ -14,7 +14,7 @@ from typing import Annotated
 import numpy as np
 from pydantic import Field, TypeAdapter
 
-from ...core.capability import Capability, InvocationContext, SystemContext
+from ...core.capability import Capability, InvocationContext
 from ...core.config import DllConnection, InstrumentConfig
 from ...core.contracts import CapabilityId, ContractModel, InstrumentId
 from ...core.controller import (

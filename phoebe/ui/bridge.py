@@ -4,28 +4,25 @@ Out of the loop: events MUST cross into the Qt world through a Qt Signal —
 cross-thread signal emission is queued onto the Qt main thread, so slots can
 touch widgets safely; calling widget methods from the loop thread crashes
 randomly.  Into the loop: panels submit CommandEnvelopes via
-``gateway.submit_threadsafe(envelope, loop)``.
+``services.call(services.runs.submit(envelope))``.
 
-Import requires PyQt5 (``pip install phoebe[ui]``); the core never imports
-this module.
+The bridge consumes the EventService (plan §6.1) — the UI never touches the
+bus directly.  Import requires PyQt5 (``pip install phoebe[ui]``); the core
+never imports this module.
 """
 from __future__ import annotations
 
-import asyncio
-from typing import Iterable
+from collections.abc import Iterable
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from ..core.bus import DropPolicy, EventBus
-
-DEFAULT_UI_TOPICS = (
-    "progress", "run_state", "data_pointer", "device_health", "error", "log",
-)
+from ..services import ServiceHub
+from ..services.events import DEFAULT_TOPICS
 
 
 class UiEventBridge(QObject):
-    """Pumps bus events into a Qt Signal; panels connect with the default
-    (auto → queued across threads) connection type."""
+    """Pumps service-layer events into a Qt Signal; panels connect with the
+    default (auto → queued across threads) connection type."""
 
     event_received = pyqtSignal(object)          # emits BusEvent instances
 
@@ -33,19 +30,20 @@ class UiEventBridge(QObject):
         super().__init__()
         self._pump_future = None
 
-    def start(self, bus: EventBus, loop: asyncio.AbstractEventLoop,
-              topics: Iterable[str] = DEFAULT_UI_TOPICS) -> None:
+    def start(self, services: ServiceHub,
+              topics: Iterable[str] = DEFAULT_TOPICS) -> None:
+        topic_list = list(topics)
+
         async def subscribe_and_pump() -> None:
             # subscribe on the loop thread — the bus is single-threaded by design
-            sub = bus.subscribe(list(topics), policy=DropPolicy.DROP_OLDEST)
+            sub = await services.events.subscribe(topic_list)
             try:
                 async for event in sub:
                     self.event_received.emit(event)  # queued into the Qt thread
             finally:
-                bus.unsubscribe(sub)
+                services.events.unsubscribe(sub)
 
-        self._pump_future = asyncio.run_coroutine_threadsafe(
-            subscribe_and_pump(), loop)
+        self._pump_future = services.call(subscribe_and_pump())
 
     def stop(self) -> None:
         """Cancel the pump before the loop shuts down (call from the Qt side)."""

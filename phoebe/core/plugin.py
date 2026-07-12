@@ -7,9 +7,16 @@ write data through ``ctx.writer`` and observations through ``ctx.emit_*``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Type
+from typing import Any
+from collections.abc import Callable
 
 from .contracts import ContractModel
+
+#: The plugin-facing API version this kernel implements.  Bumped only on
+#: breaking changes to the plugin surface (ctx / Depends / capability
+#: protocols); admission rejects plugins declaring another major version
+#: with PLUGIN_API_INCOMPATIBLE instead of failing mid-run (plan §6.4).
+PLUGIN_API_VERSION = 1
 
 
 class Plugin:
@@ -17,7 +24,8 @@ class Plugin:
     entrypoint with ``@on_command``."""
 
     plugin_id: str = ""
-    config_type: Type[ContractModel] = ContractModel
+    config_type: type[ContractModel] = ContractModel
+    api_version: int = PLUGIN_API_VERSION
 
 
 def on_command(command: str) -> Callable:
@@ -37,6 +45,7 @@ class PluginSpec:
     plugin_cls: type[Plugin]
     method_name: str
     config_type: type[ContractModel]
+    api_version: int = PLUGIN_API_VERSION
 
     def instantiate(self) -> Plugin:
         return self.plugin_cls()
@@ -64,6 +73,7 @@ class PluginRegistry:
                 plugin_cls=plugin_cls,
                 method_name=name,
                 config_type=plugin_cls.config_type,
+                api_version=getattr(plugin_cls, "api_version", PLUGIN_API_VERSION),
             )
             if command in self._by_command:
                 raise ValueError(

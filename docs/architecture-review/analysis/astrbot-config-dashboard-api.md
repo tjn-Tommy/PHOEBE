@@ -1,0 +1,110 @@
+# Panel Report: AstrBot Config System, Dashboard Backend, Persistence (Frontend–Backend Boundary)
+
+Scope reviewed in full: `astrbot/core/config/` (4 files, ~4.8k lines), `astrbot/dashboard/` framework (`server.py`, `api/app.py`, `api/router.py`, `responses.py`, `schemas.py`, `asgi_runtime.py` skimmed), route modules `auth.py`, `logs.py`, `chat.py`, `plugins.py`, `updates.py`, `static_files.py`, services `config_service.py`, `log_service.py`, `update_service.py` (+ targeted reads of `plugin_service.py`, `chat_service.py`, `static_file_service.py`), `astrbot/core/db/` skimmed, plus the Vue side (`dashboard/src/components/shared/ConfigItemRenderer.vue`, `AstrBotConfigV4.vue`) to verify the schema→UI pipeline end-to-end.
+
+---
+
+## 1. Design inventory
+
+### 1.1 `AstrBotConfig`: a dict subclass that self-heals against a reference default
+
+`AstrBotConfig(dict)` (`astrbot/core/config/astrbot_config.py:28`) loads a JSON file, then **recursively merges it against `DEFAULT_CONFIG`**: missing keys get defaults inserted, `None` values are replaced by defaults, type-mismatched sub-dicts are reset, and key *order* is normalized to match the reference (`astrbot_config.py:166-223`). If anything changed, it rewrites the file (`astrbot_config.py:102-103`). This is the entire schema-evolution story for config: ship new defaults, and every install upgrades its config file on next boot. Two important details: (a) keys **absent from the reference are silently dropped** — the rebuilt `new_conf` is populated only from `refer_conf` iteration, and unknown keys are merely logged as "removed" (`astrbot_config.py:204-209`); (b) saves are atomic — `tempfile.mkstemp` in the target directory, `fsync`, then `os.replace` (`astrbot_config.py:234-251`). The class also supports attribute access (`__getattr__` returns `None` for missing keys, `astrbot_config.py:253-257`) via `object.__setattr__` tricks to keep bookkeeping fields out of the persisted dict (`astrbot_config.py:48-51`).
+
+A second constructor path takes a `schema` and derives the default config from it via `DEFAULT_VALUE_MAP` (type→zero-value, `default.py:4396-4406`; `astrbot_config.py:139-164`). This is how **plugin configs** work: a plugin ships `_conf_schema.json`, and the plugin manager instantiates `AstrBotConfig(config_path=..., schema=json.loads(...))` (`astrbot/core/star/star_manager.py:1106-1121`) — one mechanism for both core and plugin config, defaults merging included.
+
+### 1.2 The config schema doubles as UI metadata — three coexisting generations
+
+The schema format is a nested plain dict per field: `{"description", "type", "hint", "options", "labels", "items", "default", ...}` plus UI-only directives:
+
+- `options` + `labels` → select with display labels (`default.py:562-567`)
+- `condition: {other_key: value}` → conditional visibility, AND-composed, including **multi-key conditions** (`default.py:628-632`) and conditions on whole sections (`default.py:3216-3218`)
+- `invisible: True` → hidden bookkeeping field (`default.py:782-786`)
+- `render_type: "checkbox"` (`default.py:2033-2040`), `slider: {min,max,step}` (`default.py:3206`), `editor_mode: True` → Monaco editor (`default.py:2499-2503`)
+- `_special: "select_provider" | "get_embedding_dim" | ...` → escape hatch to a bespoke Vue widget (`default.py:2208-2213`, `default.py:3109-3117`)
+- `template_schema` for typed entries inside a free-form dict (`default.py:2053-2083`); `config_template` for "pick a template, get a prefilled object" list items (`default.py:334-549` — 15+ platform templates)
+
+There are **three metadata generations in one file**: `CONFIG_METADATA_2` (`default.py:328`) — organized by *storage shape*, still used for save-time validation and platform/provider templates, with a docstring admitting it "will be gradually phased out" (`default.py:318-327`); `CONFIG_METADATA_3` (`default.py:3080`) — organized by *presentation*, whose item keys are **dotted paths into the config** (`"provider_settings.enable"`, `default.py:3089-3094`), decoupling UI grouping from storage layout; and `CONFIG_METADATA_3_SYSTEM` (`default.py:4230`) for system settings.
+
+**i18n**: `ConfigMetadataI18n.convert_to_i18n_keys` rewrites every `description`/`hint`/`labels` into a deterministic key (`ai_group.agent_runner.enable.description`) resolved by the Vue i18n layer against JSON locale files (`astrbot/core/config/i18n_utils.py:33-120`, note at `default.py:3072-3079`). Platforms/plugins can carry their own i18n resources which are merge-injected with prefixed keys (`config_service.py:853-877`).
+
+### 1.3 The Vue dashboard autogenerates settings UIs from this metadata
+
+Verified end-to-end: `GET /config/astrbot` returns `{metadata, config}` (`config_service.py:709-762`); `ConfigItemRenderer.vue` is a big switch — `_special` values map to dedicated components (ProviderSelector, KnowledgeBaseSelector, TOTP manager, an "auto-detect embedding dim" button that calls back into the API) (`dashboard/src/components/shared/ConfigItemRenderer.vue:4-77`), then `options`→select, `slider`→v-slider+numeric field, `editor_mode`→Monaco, falling through to typed text fields (`ConfigItemRenderer.vue:97-180`). `AstrBotConfigV4.vue` evaluates `condition` dicts against current values by dotted-path lookup, both per-item and per-section (`AstrBotConfigV4.vue:153-166, 208-221`). Adding a config option to `default.py` (+2 locale JSON entries) produces a working settings UI with zero frontend code.
+
+### 1.4 Validation on save
+
+Validation is a hand-rolled recursive walker, `validate_config` (`dashboard/services/config_service.py:203-305`): it checks declared types, **coerces** strings→int/float via `try_cast` (`config_service.py:45-61`), replaces `None` with the type's zero-value (`:214-216`), validates `file`-type paths against a per-key sandbox folder convention (`:222-246`), and validates `template_list` items against their template schema (`:74-101`). Errors are accumulated as strings; any error aborts the save with `ValueError` (`config_service.py:446-447`), which a global FastAPI exception handler converts to a 400 envelope (`api/app.py:156-158`). Core saves validate against `CONFIG_METADATA_2`; plugin saves validate against the plugin's own schema, then hot-reload the plugin (`config_service.py:909-928`). Save of the main profile additionally: strips protected 2FA fields unless a TOTP code is presented (`config_service.py:541-556`), triggers a pipeline reload (`:561`), and runs a **post-save connectivity probe** whose warning is appended to the success message rather than failing the save (`config_service.py:376-418, 562-565`). Note FastAPI request bodies are mostly `extra="allow"` pydantic shells (`dashboard/schemas.py:8-9`) — the real validation lives in the walker.
+
+### 1.5 Dashboard server: FastAPI + Hypercorn, service layer, dual route surface
+
+- **Framework**: FastAPI served by Hypercorn (`dashboard/server.py:9-16, 629-650`), one ASGI app built by `create_dashboard_asgi_app` (`api/app.py:85-193`).
+- **Route registration**: each domain module exposes two `APIRouter`s — a `legacy_router` under `/api/*` (`include_in_schema=False`) and a documented `router` aggregated under `/api/v1` by `build_api_router()` (`api/router.py:32-63`); OpenAPI docs are auto-served at `/api/v1/docs` (`api/app.py:92-98`). Nearly every endpoint exists twice, sharing a service call.
+- **Service layer**: all services are constructed once and hung on `app.state.services` as a `SimpleNamespace` (`api/app.py:104-147`); routes fetch them via `request.app.state` in FastAPI `Depends` factories (`api/logs.py:24-25`). Services hold **direct references to `core_lifecycle`** and its managers (`api/app.py:110-136`) — no queue, no RPC; e.g. `BotConfigService` mutates `self.config["platform"]` in place then calls `save_config` and `platform_manager.load_platform` directly (`config_service.py:1180-1218`).
+- **Envelope**: every response is `{"status": "ok"|"error", "message", "data"}` (`dashboard/responses.py:14-22`), with a typed `ApiError(message, status_code, data)` exception mapped by a global handler (`responses.py:7-11`, `api/app.py:149-154`). Plugin operations add a third `"warning"` status carrying structured data like `{"warning_type": ..., "can_ignore": True}` (`api/plugins.py:115-121`, `plugin_service.py:1757-1765`).
+- **Auth**: HS256 JWT with a secret auto-generated and persisted into config on first run (`server.py:470-477`); enforced by an ASGI middleware with an explicit allowlist of unauthenticated paths (`server.py:243-315`); token accepted from `Authorization: Bearer` or an httponly strict-samesite cookie (`server.py:416-429`, `api/auth.py:212-225`). `/api/v1` additionally supports **scoped API keys** (hash-stored, scope-inclusion map) via `require_scope` (`api/auth.py:110-173`). Login and TOTP endpoints get a **per-IP token-bucket rate limiter** with TTL eviction of idle buckets (`server.py:40-107, 351-380`). First-run generates a password (env-overridable) and forces a change (`astrbot_config.py:107-137`).
+
+### 1.6 Real-time channels
+
+Three distinct mechanisms, each matched to its use case:
+
+- **Logs → SSE with replay.** A `LogBroker` keeps a `deque(maxlen=N)` ring cache and a list of per-subscriber bounded `asyncio.Queue`s; publish is `put_nowait` with drop-on-full (`astrbot/core/log.py:126-147`). The SSE endpoint replays cached entries newer than the browser-supplied `Last-Event-ID`, then registers a queue and streams, unregistering in `finally` (`dashboard/services/log_service.py:29-63`; route returns `StreamingResponse(..., media_type="text/event-stream")`, `api/logs.py:32-41`).
+- **Chat responses → per-request SSE over a back-queue.** `build_chat_stream` creates a per-message queue via `webchat_queue_mgr.get_or_create_back_queue(message_id, conv_id)` that the core pipeline fills; the HTTP generator drains it (`dashboard/services/chat_service.py:727-762`).
+- **Live chat → WebSocket**, with the route deliberately thin: it passes `receive_json`/`send_json`/`close` as callables into the service so the service is transport-agnostic and testable (`api/live_chat.py:15-47`).
+
+### 1.7 Long-running operations over HTTP
+
+Two patterns coexist. **Plugin install/update/uninstall block the request**: the POST awaits git clone + pip install inline and returns the final envelope (`api/plugins.py:501-530`, `plugin_service.py:1552-1592`); progress is visible only through the parallel log SSE channel. **Core self-update uses task + poll**: `update_project` spawns `asyncio.create_task`, records a `progress_id`→stage-dict, dedupes concurrent requests for the same id, and returns immediately; the UI polls `GET /updates/progress/{task_id}` (`dashboard/services/update_service.py:101-113, 152-191`).
+
+### 1.8 Static serving of the built Vue app + version pinning
+
+The built dist carries an `assets/version` file; the backend reads it (`astrbot/core/utils/io.py:368-384`) and picks a dist via a cascade: explicit dir → `data/dist` if version-compatible → bundled `astrbot/dashboard/dist` → incompatible `data/dist` **with a logged warning** as last resort (`server.py:185-224`, `io.py:432-475`). SPA routing is handled by registering each known frontend route to serve `index.html` plus a catch-all static handler that 404s `/api` paths (`api/static_files.py:37-40`), with explicit `..`/absolute-path traversal defenses using `resolve()`+`relative_to()` (`services/static_file_service.py:48-70`). The startup banner even distinguishes "WebUI ready" from "static files missing" (`server.py:608-614`).
+
+### 1.9 DB layer (skim)
+
+Async SQLAlchemy/SQLModel: `BaseDatabase` is an ABC dataclass owning `create_async_engine` + `async_sessionmaker(expire_on_commit=False)` and an `get_db()` asynccontextmanager (`astrbot/core/db/__init__.py:33-69`); SQLite gets `timeout=30` connect args (`:45-46`) and WAL/busy_timeout/synchronous pragmas at init (`db/sqlite.py:51-68`). Schema evolution is two-tier: idempotent column sniffing (`PRAGMA table_info` → `ALTER TABLE ADD COLUMN`) run on every startup (`sqlite.py:70-147`), plus one-shot versioned migration scripts gated by a stored preference flag (`db/migration/helper.py:17-69`). Core logic sees only the `BaseDatabase` interface (the dashboard receives `db: BaseDatabase`, `server.py:173-182`); the interface is enormous (~922 lines of abstract methods) but backend-agnostic.
+
+---
+
+## 2. Quality observations
+
+**Genuinely clean:** the response envelope + `ApiError` + global exception handlers (uniform error surface, no per-route try/except in v1 routes); the thin-route/fat-service split where routes only adapt HTTP↔service; the SSE log channel (ring buffer + bounded per-subscriber queues + `Last-Event-ID` replay is the correct, drop-tolerant design); atomic config writes; the token-bucket registry with eviction; the static-dist version cascade with graceful degradation; the WebSocket route injecting I/O callables into the service; the task+poll update pattern with duplicate-task detection.
+
+**Organically grown / accidental complexity to avoid copying:**
+
+- `default.py` is a 4,406-line Python dict monolith mixing defaults, storage-shaped metadata, presentation-shaped metadata, and 40+ vendor templates. Three metadata generations coexist, with save-validation still bound to the deprecated one (`config_service.py:431-435`) — schema drift between them is checked by nothing.
+- `validate_config` has dead/duplicated branches (the `list` type check appears at both `config_service.py:248-251` and `:286-289`; `try_cast`'s float path can fall through returning implicit `None`, `:45-61`). Type coercion mutating the input dict during validation is subtle.
+- `AstrBotConfig.__getattr__` returning `None` for missing keys (`astrbot_config.py:253-257`) silently masks typos; `self.update(conf)` is called twice (`astrbot_config.py:101, 105`); silent pruning of unrecognized keys on load (`:204-209`) means a downgrade or typo can destroy user data with only an INFO log.
+- The dual legacy/v1 route surface roughly doubles every API file (`api/auth.py` is 496 lines for ~8 logical endpoints) — the cost of retrofitting API versioning instead of starting with it.
+- `asgi_runtime.py` (719 lines) is a Flask/Quart-compatibility shim over FastAPI using four `contextvars` to emulate `request`/`g` globals for plugin web handlers (`dashboard/asgi_runtime.py:18-29`), plus regex-based re-implementation of Flask route matching for plugin APIs (`api/plugins.py:152-178`) — pure migration debt.
+- Coupling is honest but tight: every service takes the whole `core_lifecycle` god object; config dicts are shared mutable state between services and running managers (`config_service.py:1187-1189` mutates then saves the same live object). Works because everything is single-loop asyncio, but nothing enforces it.
+- Body validation is permissive (`extra="allow"` shells, `_json_or_empty` swallowing parse errors, `api/chat.py:42-47`), so bad payloads surface late as string-matched `ValueError`s ("not found" substring checks at `config_service.py:1240-1243`). Error messages mix Chinese and English.
+
+---
+
+## 3. Transferability triage (against Phoebe's requirements: reliability, resource safety, serialized instrument access, fault isolation, offline sim testing; Vue+Tauri planned)
+
+**(a) Directly adoptable**
+
+1. **Response envelope + typed `ApiError` + global exception handlers** (`responses.py:7-22`, `api/app.py:149-163`). Trivially compatible with Phoebe's `CommandEnvelope`/ack world; gives the Vue frontend one error contract. AstrBot's third `"warning"` status with structured `can_ignore` data (`plugin_service.py:1757-1765`) maps well to "command accepted but instrument reported degraded state".
+2. **SSE log streaming with ring-buffer replay** (`core/log.py:126-147`, `log_service.py:29-63`). Phoebe's EventBus already has bounded droppable subscriber queues — this is the same architecture; the `Last-Event-ID` replay trick is exactly what a reconnecting Tauri webview needs. Same pattern serves `RunStateEvent`/`DataPointerEvent` streams (previews only, honoring the 64KB cap).
+3. **Task + progress-poll for long HTTP operations** (`update_service.py:101-191`). Phoebe's runs already have a state machine; exposing `GET /runs/{id}` as the poll target plus SSE for push is strictly better than AstrBot's blocked-await plugin installs. Copy the dedupe-by-id guard (`update_service.py:173-179`).
+4. **Static dist version pinning + cascade + traversal-safe serving** (`io.py:368-475`, `server.py:185-224`, `static_file_service.py:48-70`). Directly relevant to shipping the Vue bundle with a Python backend (also under Tauri where the UI may still hit a local HTTP core). The `assets/version` file + "compatible / fallback-with-warning / refuse" ladder prevents silent UI/backend contract skew.
+5. **Auth stack for a LAN-exposed lab console**: JWT + httponly cookie, allowlist middleware, per-IP token bucket on login, generated-first-password flow (`server.py:40-315`, `astrbot_config.py:107-137`). Lab instruments on a shared network need exactly this level (not more).
+6. **Atomic config writes** (`astrbot_config.py:234-251`) — cheap and mandatory for reliability.
+
+**(b) Adoptable with adaptations**
+
+1. **Schema-as-UI-metadata is the headline idea**: one declarative source drives widget choice, conditional visibility, grouping, i18n, and validation, so adding an instrument option requires no frontend work. For Phoebe, *do not* copy the untyped-dict format: Phoebe already has `ContractModel` pydantic models; emit the metadata from pydantic (`model_json_schema()` + `json_schema_extra` for `hint/options/labels/condition/slider/_special/invisible`) so schema and validation cannot drift — the drift between `CONFIG_METADATA_2` and `_3` is AstrBot's proven failure mode. Keep three specific inventions: dotted-path keys separating presentation grouping from storage shape (`default.py:3089`), the `condition` dict evaluated client-side (`AstrBotConfigV4.vue:153-166`), and the `_special` escape hatch for domain widgets (`ConfigItemRenderer.vue:4-77`) — Phoebe analogs: "probe instrument \*IDN?", "run mask preview", "detect DAQ channels" (cf. AstrBot's `get_embedding_dim` round-trip, `config_service.py:1490-1539`).
+2. **Defaults merging on upgrade** (`astrbot_config.py:166-223`): adopt the recursive fill-missing-with-defaults, but **never the silent pruning of unknown keys** — for a lab platform, unknown keys should fail loudly or be preserved; Phoebe's `validate_boundary` (strict, extra=forbid) is the right enforcement point, with the merge running *before* validation as a migration step.
+3. **Plugin config via shipped schema** (`star_manager.py:1106-1121`): the pattern "plugin ships `_conf_schema.json` → platform materializes config file → dashboard auto-renders a settings page → save hot-reloads plugin" maps one-to-one onto Phoebe experiment plugins (schema → TOML section + auto-generated panel). Adapt: validation must route through `validate_boundary`, and "hot-reload" must respect leases (can't reload a plugin mid-run).
+4. **Service layer on `app.state` with `Depends`** (`api/app.py:104-147`): adopt the shape, but Phoebe services must wrap `Gateway.submit`/`TaskManager` instead of holding mutable references into core the way AstrBot services mutate live config dicts (`config_service.py:1187-1189`) — that pattern is incompatible with Phoebe's frozen-contract, single-choke-point design and with serialized instrument access.
+5. **DB layer**: async SQLAlchemy + ABC interface + WAL pragmas + startup column-sniffing (`db/sqlite.py:51-147`) is a pragmatic fit for Phoebe's run-index metadata (HDF5 stays primary for bulk data). Adapt: consolidate the scattered `_ensure_*_column` calls into one declared migration table rather than five ad-hoc methods.
+
+**(c) Unsuitable — domain break**
+
+1. **Per-message chat back-queues** (`chat_service.py:758-762`): built for request/response conversations where each HTTP request owns one answer stream. Phoebe observations are broadcast (many panels watch one run) — the EventBus fan-out is the right primitive; copying per-request queues would recreate ordering/ownership problems Phoebe already solved.
+2. **Blocked-await for installs** (`plugins.py:501-530`): tolerable for chat-bot administration, wrong for anything touching instruments — a blocked HTTP worker holding an instrument lease with no cancel point violates Phoebe's checkpoint/lease model. Use the task+poll pattern (3.a.3) universally.
+3. **`AstrBotConfig` as live shared mutable state with attribute access**: the whole design (dict subclass, `__getattr__`→`None`, in-place mutation by services, save-on-`__delattr__`) trades safety for convenience — acceptable when the worst outcome is a bot replying oddly; incompatible with Phoebe's ContractModel strictness where config errors can drive hardware.
+4. **Legacy/v1 dual routing and the Flask-compat shim** (`api/app.py:165-191`, `asgi_runtime.py`): pure back-compat debt with no greenfield value. The transferable *lesson* is: version the HTTP API (`/api/v1`) and pin the frontend build to the backend version from day one, so this shim never becomes necessary.
+
+**Extension pain points / notable ideas:** AstrBot's single biggest boundary asset is that **config schema, validation, i18n, and UI generation are one pipeline** — its single biggest liability is that the pipeline's source of truth is triplicated hand-written dicts. Phoebe can get the asset without the liability by generating the same metadata JSON from its existing pydantic contracts. UNCERTAIN: whether the Vue dashboard has runtime handling for schema keys present in config but absent from metadata (I verified the renderer only iterates metadata, `AstrBotConfigV4.vue:221-231`, so orphaned config keys appear to be silently invisible in the UI — confirming would require running the dashboard).

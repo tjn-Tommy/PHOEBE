@@ -7,15 +7,29 @@ bundles checkpointing, cancellation, writing and throttled progress so a
 from __future__ import annotations
 
 import itertools
-from typing import TYPE_CHECKING, Awaitable, Callable, Sequence
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable, Sequence
 
+import numpy as np
 from pydantic import Field
 
 from .contracts import ContractModel
 
 if TYPE_CHECKING:
-    from ..domain.spectrum import SpectrumTrace
+    from .events import TracePreview
     from .task_manager import RunContext
+
+
+@runtime_checkable
+class SweepSample(Protocol):
+    """What grid_scan needs from an acquired sample — any domain trace type
+    (SpectrumTrace, ScopeWaveform wrapper, ...) qualifies; core stays free of
+    domain imports (layer contract)."""
+
+    @property
+    def y_dbm(self) -> np.ndarray: ...
+
+    def preview(self) -> TracePreview: ...
 
 
 class ScanAxis(ContractModel):
@@ -29,10 +43,10 @@ class ScanPointMeta(ContractModel):
 
 
 async def grid_scan(
-    ctx: "RunContext",
+    ctx: RunContext,
     axes: Sequence[ScanAxis],
     apply: Callable[[dict[str, float]], Awaitable[None]],       # set one grid point
-    acquire: Callable[[], "Awaitable[SpectrumTrace]"],          # measure one point
+    acquire: Callable[[], Awaitable[SweepSample]],            # measure one point
     *,
     dataset: str = "traces/grid_scan",
 ) -> int:
@@ -40,7 +54,7 @@ async def grid_scan(
     points = list(itertools.product(*(axis.values for axis in axes)))
     total = len(points)
     for i, combo in enumerate(points):
-        point = {axis.name: value for axis, value in zip(axes, combo)}
+        point = {axis.name: value for axis, value in zip(axes, combo, strict=True)}
         await ctx.checkpoint("scan_point", index=i,
                              **{k: float(v) for k, v in point.items()})
         await apply(point)

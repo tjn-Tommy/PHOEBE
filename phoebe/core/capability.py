@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+from collections.abc import Awaitable, Callable
 
 from pydantic import TypeAdapter
 

@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
+import uuid
 
 import h5py
 import pytest
 
 from phoebe.app.bootstrap import build_runtime
+from phoebe.contracts.commands import AckCode
 from phoebe.core.config import parse_app_config
 from phoebe.core.events import RunState
 from phoebe.core.gateway import CommandEnvelope
@@ -63,8 +64,10 @@ def _tpa_payload(steps: int = 8) -> dict:
 
 
 async def _submit(runtime, command: str, payload: dict):
+    # unique ids: the command ledger replays reused ids by design (plan §6.4)
     ack = await runtime.gateway.submit(CommandEnvelope(
-        command_id="cmd-1", command=command, payload=payload))
+        command_id=f"cmd-{uuid.uuid4().hex[:8]}", command=command,
+        payload=payload))
     return ack
 
 
@@ -76,7 +79,8 @@ async def test_tpa_run_completes_with_full_run_directory(runtime, tmp_path):
     state = await runtime.task_manager.wait(ack.task_id)
     assert state is RunState.COMPLETED
 
-    run_dirs = list((tmp_path / "runs").iterdir())
+    run_dirs = [p for p in (tmp_path / "runs").iterdir()
+                if p.is_dir() and not p.name.startswith(".")]
     assert len(run_dirs) == 1
     run_dir = run_dirs[0]
 
@@ -123,18 +127,19 @@ async def test_grid_scan_via_sweep_helper(runtime, tmp_path):
     assert ack.accepted, ack.reason
     state = await runtime.task_manager.wait(ack.task_id)
     assert state is RunState.COMPLETED
-    run_dir = next((tmp_path / "runs").iterdir())
+    run_dir = next(p for p in (tmp_path / "runs").iterdir()
+                   if p.is_dir() and not p.name.startswith("."))
     with h5py.File(run_dir / "artifacts.h5", "r") as h5:
         assert h5["traces/grid_scan"].shape == (3, 101)
 
 
-async def test_second_dispatch_rejected_423_while_running(runtime):
+async def test_second_dispatch_rejected_busy_while_running(runtime):
     ack1 = await _submit(runtime, "start_tpa_run", _tpa_payload(20))
     assert ack1.accepted
     await asyncio.sleep(0.05)
     ack2 = await _submit(runtime, "start_tpa_run", _tpa_payload(2))
     assert not ack2.accepted
-    assert "423" in (ack2.reason or "")
+    assert ack2.code is AckCode.DEVICE_BUSY        # typed code, zero prose
     runtime.task_manager.request_cancel(ack1.task_id)
     await runtime.task_manager.wait(ack1.task_id)
 
@@ -169,12 +174,14 @@ async def test_invalid_payload_rejected_at_dispatch(runtime):
     ack = await _submit(runtime, "start_tpa_run",
                         {"max_steps": "not-an-int"})
     assert not ack.accepted
+    assert ack.code is AckCode.INVALID_PAYLOAD
     assert "invalid payload" in ack.reason
 
 
 async def test_unknown_command_rejected(runtime):
     ack = await _submit(runtime, "warp_drive", {})
     assert not ack.accepted
+    assert ack.code is AckCode.UNKNOWN_COMMAND
 
 
 async def test_sim_physics_mask_drives_spectrum(runtime):

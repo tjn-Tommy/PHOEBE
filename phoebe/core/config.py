@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import tomllib
 from pathlib import Path
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError
 
@@ -48,7 +48,7 @@ class SdkConnection(ContractModel):
 
 
 Connection = Annotated[
-    Union[VisaConnection, TcpConnection, DllConnection, SdkConnection],
+    VisaConnection | TcpConnection | DllConnection | SdkConnection,
     Field(discriminator="transport"),
 ]
 
@@ -80,6 +80,19 @@ class StorageConfig(ContractModel):
     compact_metrics_to_parquet: bool = True
 
 
+class ReconnectSettings(ContractModel):
+    """Device reconnect / lifecycle policy (plan §6.3): exponential backoff
+    with a give-up ceiling, threshold-triggered handle rebuild, bounded
+    health probes."""
+
+    base_delay_s: Seconds = 1.0
+    max_delay_s: Seconds = 60.0
+    multiplier: Annotated[float, Field(ge=1.0)] = 2.0
+    give_up_attempts: Annotated[int, Field(ge=0)] = 10       # 0 = never give up
+    rebuild_after_probe_failures: Annotated[int, Field(ge=1)] = 3
+    probe_timeout_s: Seconds = 10.0
+
+
 class AppConfig(ContractModel):
     instruments: tuple[InstrumentConfig, ...]
     plugin_bindings: dict[str, dict[str, str]] = Field(default_factory=dict)
@@ -90,6 +103,8 @@ class AppConfig(ContractModel):
     suspenders: tuple[SuspenderConfig, ...] = ()
     lease_ttl_s: Seconds = 600.0
     cleanup_timeout_s: Seconds = 30.0
+    reconnect: ReconnectSettings = ReconnectSettings()
+    health_poll_interval_s: Annotated[float, Field(ge=0)] = 30.0   # 0 disables the poller
 
     def instrument(self, instrument_id: str) -> InstrumentConfig:
         for cfg in self.instruments:

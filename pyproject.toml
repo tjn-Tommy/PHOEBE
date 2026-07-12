@@ -19,7 +19,8 @@ visa = ["pyvisa", "pyvisa-py"]
 daq = ["nidaqmx"]
 parquet = ["pyarrow>=14"]
 ui = ["PyQt5", "pyqtgraph"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6", "import-linter>=2",
+       "pyright>=1.1"]
 
 [tool.setuptools.packages.find]
 include = ["phoebe*"]
@@ -27,3 +28,89 @@ include = ["phoebe*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# ---------------------------------------------------------------- gates (A-1)
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["awg5204", "TPA_experiment", "AstrBot"]
+
+[tool.ruff.lint]
+# E4/E7/E9 + F: correctness; W: warnings; B: bugbear traps; ASYNC: blocking
+# calls in async code; UP: modern syntax.  I (import order) intentionally out.
+select = ["E4", "E7", "E9", "F", "W", "B", "ASYNC", "UP"]
+ignore = [
+    "B008",   # Depends() in parameter defaults is the plugin DI idiom (§7)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# stage()/unstage() are intentional default no-ops on the controller ABC (§4.4)
+"phoebe/core/controller.py" = ["B027"]
+# demo prints a directory listing at the end; blocking there is fine
+"examples/run_sim_demo.py" = ["ASYNC240"]
+# test helpers take timeout params; broad pytest.raises is deliberate;
+# polling loops (ASYNC110) are how tests observe states they don't control
+"tests/*" = ["ASYNC109", "ASYNC110", "B017"]
+
+[tool.importlinter]
+root_package = "phoebe"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Legacy codebases are reference-only (CLAUDE.md hard rule)"
+type = "forbidden"
+source_modules = ["phoebe"]
+forbidden_modules = ["awg5204", "TPA_experiment"]
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture (refactor.md §18-13; plan §6.1)"
+type = "layers"
+layers = [
+    "phoebe.ui",
+    "phoebe.app",
+    "phoebe.services",
+    "phoebe.plugins",
+    "phoebe.instruments",
+    "phoebe.transports",
+    "phoebe.domain",
+    "phoebe.core",
+    "phoebe.contracts",
+]
+
+[[tool.importlinter.contracts]]
+name = "Plugins import protocols, never implementations (§18 rule 9)"
+type = "forbidden"
+source_modules = ["phoebe.plugins"]
+forbidden_modules = [
+    "phoebe.instruments.ni_daq",
+    "phoebe.instruments.rs_rto6",
+    "phoebe.instruments.santec_slm200",
+    "phoebe.instruments.sim",
+    "phoebe.instruments.tek_awg5204",
+    "phoebe.instruments.yokogawa_aq637x",
+    "phoebe.instruments.registry",
+    "phoebe.transports",
+    "phoebe.ui",
+]
+
+[[tool.importlinter.contracts]]
+name = "UI stays on the services surface (no direct core internals) (plan C-4)"
+type = "forbidden"
+source_modules = ["phoebe.ui"]
+forbidden_modules = [
+    "phoebe.instruments",
+    "phoebe.transports",
+    "phoebe.domain",
+    "phoebe.core.admission",
+    "phoebe.core.bus",
+    "phoebe.core.capability",
+    "phoebe.core.catalog",
+    "phoebe.core.command_ledger",
+    "phoebe.core.controller",
+    "phoebe.core.device_manager",
+    "phoebe.core.gateway",
+    "phoebe.core.journal",
+    "phoebe.core.task_manager",
+    "phoebe.core.worker",
+]
+allow_indirect_imports = true

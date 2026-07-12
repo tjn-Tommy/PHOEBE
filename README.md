@@ -1,5 +1,5 @@
 # PHOEBE 
-
+![PHOEBE](Phoebe.jpg)
 **P**hotonic **H**ardware **O**rchestrator for **E**xtensible **B**enchtop **E**xperiments
 
 按 [refactor.md](refactor.md) v2 架构实现的实验室仪器统一控制平台，整合了原先独立的两套代码库：

@@ -6,42 +6,44 @@ and events never share a queue — the point-to-point command path cannot be
 crowded out by the droppable observation stream.
 
 ``pause`` / ``resume`` / ``cancel`` are platform built-ins that go straight
-to the TaskManager state machine, bypassing plugins.
+to the TaskManager state machine, bypassing plugins.  Their acks carry the
+same typed ``AckCode`` vocabulary as dispatch acks (plan §6.4).
+
+The command/ack models moved to ``phoebe.contracts.commands`` (plan §7
+promotion); they are re-exported here for pre-promotion import paths.
 """
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from pydantic import Field
-
-from .contracts import AwareDatetime, ContractModel, TaskId, utc_now
+from ..contracts.commands import (
+    AckCode,
+    AdmissionDecision,
+    CommandAck,
+    CommandEnvelope,
+    ack_from_decision,
+)
+from .contracts import TaskId
 
 if TYPE_CHECKING:
     from .task_manager import TaskManager
 
-
-class CommandEnvelope(ContractModel):
-    command_id: str
-    command: str                       # "start_tpa_run" / "pause" / "cancel"
-    payload: dict[str, Any] = Field(default_factory=dict)
-    issued_by: str = "local_ui"
-    t_wall: AwareDatetime = Field(default_factory=utc_now)
-
-
-class CommandAck(ContractModel):
-    command_id: str
-    accepted: bool
-    task_id: TaskId | None = None
-    queued: bool = False
-    reason: str | None = None          # e.g. "423 locked by task_..."
-
+__all__ = [
+    "AckCode",
+    "AdmissionDecision",
+    "BUILTIN_COMMANDS",
+    "CommandAck",
+    "CommandEnvelope",
+    "Gateway",
+    "ack_from_decision",
+]
 
 BUILTIN_COMMANDS = frozenset({"pause", "resume", "cancel"})
 
 
 class Gateway:
-    def __init__(self, task_manager: "TaskManager") -> None:
+    def __init__(self, task_manager: TaskManager) -> None:
         self._tm = task_manager
 
     async def submit(self, envelope: CommandEnvelope) -> CommandAck:
@@ -50,7 +52,7 @@ class Gateway:
         return await self._tm.dispatch(envelope)
 
     def submit_threadsafe(self, envelope: CommandEnvelope,
-                          loop: asyncio.AbstractEventLoop) -> "asyncio.Future[CommandAck]":
+                          loop: asyncio.AbstractEventLoop) -> asyncio.Future[CommandAck]:
         """Entry point for the Qt thread: schedules submit() onto the loop."""
         return asyncio.run_coroutine_threadsafe(self.submit(envelope), loop)  # type: ignore[return-value]
 
@@ -58,6 +60,7 @@ class Gateway:
         raw = envelope.payload.get("task_id")
         if not isinstance(raw, str) or not raw:
             return CommandAck(command_id=envelope.command_id, accepted=False,
+                              code=AckCode.INVALID_PAYLOAD,
                               reason="payload.task_id (str) is required")
         task_id = TaskId(raw)
         try:
@@ -69,9 +72,10 @@ class Gateway:
                 self._tm.request_cancel(task_id)
         except KeyError:
             return CommandAck(command_id=envelope.command_id, accepted=False,
+                              code=AckCode.UNKNOWN_TASK,
                               reason=f"unknown task {task_id}")
         except Exception as exc:                    # invalid state transition etc.
             return CommandAck(command_id=envelope.command_id, accepted=False,
-                              reason=str(exc))
+                              code=AckCode.INVALID_STATE, reason=str(exc))
         return CommandAck(command_id=envelope.command_id, accepted=True,
-                          task_id=task_id)
+                          code=AckCode.ACCEPTED, task_id=task_id)

@@ -1,18 +1,20 @@
-"""PyQt5 UI shell (refactor.md §13.2).
+"""PyQt5 UI shell (refactor.md §13.2; evolution plan PR C-4).
 
-Panels do exactly two things: assemble forms into strongly-typed command
-payloads sent through the Gateway, and refresh themselves from EventBus
-events delivered by the UiEventBridge.  No Driver/Controller imports, no
-direct instrument calls — the import-linter contract (§18 rule 9) holds.
+Panels do exactly three things: assemble forms into strongly-typed command
+payloads submitted through the RunService, refresh themselves from EventBus
+events delivered by the UiEventBridge, and query the service layer for
+snapshots (runs catalog, device stats, bus health).  No Driver/Controller
+imports, no core reach-ins — the import-linter contracts hold.
+
+Acks are parsed by ``AckCode`` — zero prose (plan §6.4).
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
@@ -34,13 +36,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..contracts.commands import CommandAck, CommandEnvelope
+from ..contracts.run import RunState
 from ..core.config import AppConfig
-from ..core.events import RunState
-from ..core.gateway import CommandAck, CommandEnvelope, Gateway
+from ..services import ServiceHub
 from .bridge import UiEventBridge
 
-_ACTIVE_STATES = {RunState.QUEUED, RunState.RUNNING, RunState.PAUSING,
-                  RunState.PAUSED, RunState.STOPPING}
+_ACTIVE_STATES = {RunState.QUEUED, RunState.PREPARING, RunState.RUNNING,
+                  RunState.PAUSING, RunState.PAUSED, RunState.STOPPING,
+                  RunState.FINALIZING}
 
 
 class DevicePanel(QGroupBox):
@@ -190,7 +194,7 @@ class RunControlPanel(QGroupBox):
     def set_run_state(self, state: RunState | None, *, final: bool = True) -> None:
         """``final=False`` marks a terminal state whose cleanup (lease release,
         writer flush) is still running — Start stays disabled until the
-        TaskManager re-broadcasts the terminal state with reason="final"."""
+        TaskManager re-broadcasts the terminal state with ``final=True``."""
         self.state_label.setText(state.value if state else "idle")
         active = (state in _ACTIVE_STATES) if state else False
         self.start_btn.setEnabled(not active and final)
@@ -204,7 +208,7 @@ class RunControlPanel(QGroupBox):
 
 
 class PlotPanel(QWidget):
-    """Live spectrum preview (from DataPointerEvents) + metric history."""
+    """Live previews (rendered by PreviewPayload discriminator) + metric history."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -226,8 +230,15 @@ class PlotPanel(QWidget):
         layout.addWidget(self.spectrum)
         layout.addWidget(self.metric)
 
-    def show_preview(self, x_nm: list[float], y_dbm: list[float]) -> None:
-        self._spectrum_curve.setData(x_nm, y_dbm)
+    def show_preview(self, preview: Any) -> None:
+        """Render by discriminator (plan §6.5); unknown kinds are ignored."""
+        kind = getattr(preview, "preview_type", "")
+        if kind == "spectrum":
+            self._spectrum_curve.setData(preview.x_nm, preview.y_dbm)
+        elif kind == "waveform":
+            self._spectrum_curve.setData(preview.t_s, preview.y)
+        elif kind == "scalar_series":
+            self._metric_curve.setData(preview.x, preview.y)
 
     def append_metric(self, step: int, peak_dbm: float) -> None:
         self._steps.append(step)
@@ -251,33 +262,131 @@ class LogPanel(QGroupBox):
         self.text.appendPlainText(line)
 
 
+class RunsPanel(QGroupBox):
+    """Run catalog view (journal projection via RunService)."""
+
+    _COLUMNS = ("run", "plugin", "state", "outcome", "finalized")
+    _rows_ready = pyqtSignal(object)             # list[RunResult], from the loop
+
+    def __init__(self, services: ServiceHub) -> None:
+        super().__init__("Runs")
+        self._services = services
+        self.table = QTableWidget(0, len(self._COLUMNS))
+        self.table.setHorizontalHeaderLabels(self._COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.refresh_btn = QPushButton("Refresh")
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.table)
+        layout.addWidget(self.refresh_btn)
+        self.refresh_btn.clicked.connect(self.refresh)
+        self._rows_ready.connect(self._fill)
+
+    def refresh(self) -> None:
+        future = self._services.call(self._services.runs.list_runs(limit=50))
+        future.add_done_callback(
+            lambda fut: None if fut.cancelled() or fut.exception()
+            else self._rows_ready.emit(fut.result()))
+
+    def _fill(self, results: Any) -> None:
+        self.table.setRowCount(len(results))
+        for row, res in enumerate(results):
+            cells = (str(res.run_id), res.plugin_id, res.state,
+                     res.execution_outcome or "", res.finalized or "")
+            for col, text in enumerate(cells):
+                self.table.setItem(row, col, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+
+
+class DiagnosticsPanel(QGroupBox):
+    """Device operational stats + bus health (plan §6.5: drop counters are
+    published, not process-private)."""
+
+    _COLUMNS = ("instrument", "lifecycle", "ops ok", "ops failed", "last error")
+    _snapshot_ready = pyqtSignal(object, object)  # (device rows, bus stats)
+
+    def __init__(self, services: ServiceHub) -> None:
+        super().__init__("Diagnostics")
+        self._services = services
+        self.table = QTableWidget(0, len(self._COLUMNS))
+        self.table.setHorizontalHeaderLabels(self._COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.bus_label = QLabel("bus: —")
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.table)
+        layout.addWidget(self.bus_label)
+        self._snapshot_ready.connect(self._fill)
+        self._timer = QTimer(self)
+        self._timer.setInterval(3000)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
+
+    def refresh(self) -> None:
+        if not self.isVisible():
+            return
+
+        async def snapshot():
+            rows = await self._services.devices.table()
+            stats = await self._services.events.bus_stats()
+            return rows, stats
+
+        future = self._services.call(snapshot())
+        future.add_done_callback(
+            lambda fut: None if fut.cancelled() or fut.exception()
+            else self._snapshot_ready.emit(*fut.result()))
+
+    def _fill(self, rows: Any, bus_stats: Any) -> None:
+        self.table.setRowCount(len(rows))
+        for row, view in enumerate(rows):
+            last_error = (view.stats.recent_errors[-1]
+                          if view.stats and view.stats.recent_errors else "")
+            cells = (str(view.instrument_id), view.lifecycle,
+                     str(view.stats.ops_ok if view.stats else 0),
+                     str(view.stats.ops_failed if view.stats else 0),
+                     last_error)
+            for col, text in enumerate(cells):
+                self.table.setItem(row, col, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+        self.bus_label.setText(
+            f"bus: seq {bus_stats.current_seq} · dropped {bus_stats.total_dropped}"
+            f" · oversize {bus_stats.oversize_dropped}"
+            f" · failed subs {bus_stats.failed_subscriptions}")
+
+
 class MainWindow(QMainWindow):
-    """Wires panels to the Gateway (commands in) and the bridge (events out)."""
+    """Wires panels to the service layer (commands in) and the bridge
+    (events out)."""
 
     _ack_received = pyqtSignal(object)           # CommandAck from the loop thread
 
-    def __init__(self, config: AppConfig, gateway: Gateway,
-                 loop: asyncio.AbstractEventLoop, bridge: UiEventBridge) -> None:
+    def __init__(self, config: AppConfig, services: ServiceHub,
+                 bridge: UiEventBridge) -> None:
         super().__init__()
         self.setWindowTitle("PHOEBE — experiment control")
         self.resize(1280, 800)
-        self._gateway = gateway
-        self._loop = loop
+        self._services = services
         self._task_id: str | None = None
 
         self.devices = DevicePanel(config)
         self.run_control = RunControlPanel()
         self.plots = PlotPanel()
         self.log = LogPanel()
+        self.runs = RunsPanel(services)
+        self.diagnostics = DiagnosticsPanel(services)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(self.devices, 1)
         left_layout.addWidget(self.run_control, 0)
         left_layout.addWidget(self.log, 1)
+        right = QTabWidget()
+        right.addTab(self.plots, "Live")
+        right.addTab(self.runs, "Runs")
+        right.addTab(self.diagnostics, "Diagnostics")
         splitter = QSplitter()
         splitter.addWidget(left)
-        splitter.addWidget(self.plots)
+        splitter.addWidget(right)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
         self.setCentralWidget(splitter)
@@ -286,6 +395,7 @@ class MainWindow(QMainWindow):
         self.run_control.builtin_requested.connect(self._submit_builtin)
         self._ack_received.connect(self._on_ack)
         bridge.event_received.connect(self._on_event)
+        self.runs.refresh()
 
     # ---------------------------------------------------- commands (into loop)
     def _submit_command(self, command: str, payload: dict) -> None:
@@ -301,7 +411,7 @@ class MainWindow(QMainWindow):
                                      payload={"task_id": self._task_id}))
 
     def _submit(self, envelope: CommandEnvelope) -> None:
-        future = self._gateway.submit_threadsafe(envelope, self._loop)
+        future = self._services.call(self._services.runs.submit(envelope))
         # the callback fires on the loop thread; the signal hops back to Qt
         future.add_done_callback(
             lambda fut: self._ack_received.emit(
@@ -309,21 +419,21 @@ class MainWindow(QMainWindow):
 
     def _on_ack(self, ack: CommandAck | BaseException) -> None:
         # No modal dialogs here: acks arrive asynchronously and rejections
-        # (e.g. "423 locked") are routine — status bar + log are enough.
+        # (e.g. device_busy) are routine — status bar + log are enough.
         if isinstance(ack, BaseException):
             self.log.append(f"[gateway] ERROR: {ack}")
             self.statusBar().showMessage(f"gateway error: {ack}", 5000)
             return
         if not ack.accepted:
-            self.log.append(f"[gateway] rejected: {ack.reason}")
-            self.statusBar().showMessage(f"rejected: {ack.reason}", 5000)
+            detail = f" — {ack.reason}" if ack.reason else ""
+            self.log.append(f"[gateway] rejected ({ack.code.value}){detail}")
+            self.statusBar().showMessage(f"rejected: {ack.code.value}", 5000)
             return
         if ack.task_id is not None:
             self._task_id = str(ack.task_id)
             self.run_control.set_task(self._task_id)
-        self.log.append(f"[gateway] accepted"
-                        + (f" → {ack.task_id}" if ack.task_id else "")
-                        + (" (queued)" if ack.queued else ""))
+        self.log.append(f"[gateway] {ack.code.value}"
+                        + (f" → {ack.task_id}" if ack.task_id else ""))
 
     # ------------------------------------------------------ events (from loop)
     def _on_event(self, event: Any) -> None:
@@ -333,10 +443,12 @@ class MainWindow(QMainWindow):
                                        event.detail or "")
         elif kind == "run_state":
             if self._task_id is None or str(event.task_id) == self._task_id:
-                final = not event.state.is_terminal or event.reason == "final"
+                final = not event.state.is_terminal or event.final
                 self.run_control.set_run_state(event.state, final=final)
                 self.log.append(f"[{event.task_id}] state → {event.state.value}"
                                 + (f" ({event.reason})" if event.reason else ""))
+            if event.state.is_terminal and event.final:
+                self.runs.refresh()              # catalog row just finalized
         elif kind == "progress":
             self.run_control.set_progress(event.step, event.total)
             peak = event.metrics.get("peak_dbm")
@@ -344,8 +456,9 @@ class MainWindow(QMainWindow):
                 self.plots.append_metric(event.step, peak)
         elif kind == "data_pointer":
             if event.preview is not None:
-                self.plots.show_preview(event.preview.x_nm, event.preview.y_dbm)
+                self.plots.show_preview(event.preview)
         elif kind == "error":
-            self.log.append(f"[error] {event.error_type}: {event.message}")
+            self.log.append(f"[error:{event.code.value}] {event.error_type}: "
+                            f"{event.message}")
         elif kind == "log":
             self.log.append(f"[{event.level}] {event.message}")

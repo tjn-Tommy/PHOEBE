@@ -31,7 +31,7 @@ def write_santec_csv(data: np.ndarray, csv_path: str | Path) -> Path:
 def read_santec_csv(csv_path: str | Path) -> np.ndarray:
     """Inverse of write_santec_csv: recover the (H, W) uint16 grid."""
     path = Path(csv_path)
-    with open(path, "r", encoding="utf-8-sig", newline="") as file:
+    with open(path, encoding="utf-8-sig", newline="") as file:
         rows = list(csv.reader(file))
     rows = [row[:-1] if row and row[-1] == "" else row for row in rows]
     if len(rows) < 2:

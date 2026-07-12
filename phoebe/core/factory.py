@@ -9,7 +9,8 @@ controller answers to a logical id), and each controller's CapabilityRegistry
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
+from collections.abc import Callable
 
 from .config import AppConfig, InstrumentConfig
 from .controller import InstrumentController
@@ -32,7 +33,7 @@ class AppDependencies:
     """Injected services available to controller factories."""
 
     worker_pool: WorkerPool
-    bus: "EventBus | None" = None
+    bus: EventBus | None = None
     app_config: AppConfig | None = None
     sim_contexts: dict[str, object] = field(default_factory=dict)
 

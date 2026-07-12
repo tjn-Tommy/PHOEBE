@@ -35,7 +35,7 @@ class SpectrumScanConfig(ContractModel):
     reference_level_dbm: Dbm = -20.0
 
     @model_validator(mode="after")
-    def _resolution_vs_span(self) -> "SpectrumScanConfig":
+    def _resolution_vs_span(self) -> SpectrumScanConfig:
         if self.resolution_nm > self.span_nm:
             raise ValueError("resolution_nm must not exceed span_nm")
         return self

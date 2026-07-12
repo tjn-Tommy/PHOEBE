@@ -23,7 +23,8 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from collections.abc import Callable
 
 import h5py
 import numpy as np
@@ -38,12 +39,21 @@ from .contracts import (
     timestamps,
     utc_now,
 )
+# DataPointer / RunManifest were promoted to phoebe.contracts.run (plan §7);
+# re-imported here so pre-promotion import paths keep working.
+from ..contracts.run import DataPointer, RunManifest
+from .errors import WriterFailedError
 
-
-class DataPointer(ContractModel):
-    run_id: RunId
-    dataset: str
-    index: int
+__all__ = [
+    "DataPointer",
+    "MaskRecipe",
+    "MetricRow",
+    "RunManifest",
+    "RunWriter",
+    "git_state",
+    "new_run_dir",
+    "write_json",
+]
 
 
 class MetricRow(ContractModel):
@@ -60,21 +70,6 @@ class MaskRecipe(ContractModel):
     version: str
     seed: int
     params: dict[str, float | int | str] = Field(default_factory=dict)
-
-
-class RunManifest(ContractModel):
-    run_id: RunId
-    task_id: TaskId
-    plugin_id: str
-    command: str
-    created_at: AwareDatetime
-    config_json: str                 # full experiment config, verbatim
-    config_hash: str
-    app_config_hash: str = ""
-    git_commit: str = ""
-    git_dirty: bool = False
-    code_version: str = ""
-    instruments: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 def git_state(cwd: Path | None = None) -> tuple[str, bool]:
@@ -120,10 +115,18 @@ class RunWriter:
     ``append_array`` awaits a bounded queue (backpressure); the writer task
     performs the actual blocking I/O via ``asyncio.to_thread`` so the event
     loop never stalls on disk.
+
+    Failure model: the writer task never dies silently.  If it fails (file
+    open error, disk full on a metric write, ...) it records the failure,
+    notifies ``on_failure`` so the run can fail fast, and keeps draining the
+    queue — resolving every producer future exceptionally — until closed, so
+    no producer is ever parked on an unresolved future.
     """
 
     def __init__(self, run_id: RunId, run_dir: Path, *, queue_size: int = 64,
-                 compact_parquet: bool = True) -> None:
+                 compact_parquet: bool = True,
+                 on_failure: Callable[[BaseException], None] | None = None,
+                 close_timeout_s: float = 30.0) -> None:
         self.run_id = run_id
         self.run_dir = Path(run_dir)
         self._queue: asyncio.Queue[Any] = asyncio.Queue(queue_size)
@@ -133,8 +136,16 @@ class RunWriter:
         self._indices: dict[str, int] = {}
         self._compact_parquet = compact_parquet
         self._closed = False
+        self._on_failure = on_failure
+        self._failure: BaseException | None = None
+        self._close_timeout_s = close_timeout_s
 
     # ------------------------------------------------------------------ API
+    @property
+    def failure(self) -> BaseException | None:
+        """The exception that killed the writer task, if any."""
+        return self._failure
+
     def start(self) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._task = asyncio.create_task(self._run(), name=f"runwriter-{self.run_id}")
@@ -148,6 +159,7 @@ class RunWriter:
         """
         if self._closed:
             raise RuntimeError("RunWriter is closed")
+        self._raise_if_failed()
         fut: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         attrs_json = attrs.model_dump_json() if attrs is not None else None
         await self._queue.put(_Append(dataset, np.asarray(arr), attrs_json, fut))
@@ -158,6 +170,7 @@ class RunWriter:
     async def append_metric(self, row: MetricRow) -> None:
         if self._closed:
             raise RuntimeError("RunWriter is closed")
+        self._raise_if_failed()
         await self._queue.put(_Metric(row.model_dump_json()))
 
     async def append_metrics(self, *, step: int | None = None,
@@ -167,21 +180,48 @@ class RunWriter:
                                            **timestamps()))
 
     async def aclose(self) -> None:
-        """Flush everything, close files, compact metrics → parquet."""
+        """Flush everything, close files, compact metrics → parquet.
+
+        Bounded: a wedged writer task is cancelled after ``close_timeout_s``
+        instead of hanging the run's cleanup forever.
+        """
         if self._closed:
             return
         self._closed = True
         if self._task is not None:
             await self._queue.put(_CLOSE)
-            await self._task
+            try:
+                await asyncio.wait_for(self._task, timeout=self._close_timeout_s)
+            except TimeoutError:
+                logger.error("RunWriter {} close timed out after {}s; cancelling",
+                             self.run_id, self._close_timeout_s)
+                self._task.cancel()
             self._task = None
-        if self._compact_parquet:
+        if self._compact_parquet and self._failure is None:
             await asyncio.to_thread(self._compact_metrics)
+
+    def _raise_if_failed(self) -> None:
+        if self._failure is not None:
+            raise WriterFailedError(
+                f"RunWriter for {self.run_id} failed: {self._failure}"
+            ) from self._failure
+
+    def _note_failure(self, exc: BaseException) -> None:
+        if self._failure is not None:
+            return
+        self._failure = exc
+        logger.opt(exception=exc).error(
+            "RunWriter {} failed; failing producers fast", self.run_id)
+        if self._on_failure is not None:
+            try:
+                self._on_failure(exc)
+            except Exception:
+                logger.exception("RunWriter on_failure callback failed")
 
     # ---------------------------------------------------------- writer task
     async def _run(self) -> None:
-        await asyncio.to_thread(self._open_files)
         try:
+            await asyncio.to_thread(self._open_files)
             while True:
                 item = await self._queue.get()
                 if item is _CLOSE:
@@ -189,13 +229,29 @@ class RunWriter:
                 if isinstance(item, _Append):
                     try:
                         index = await asyncio.to_thread(self._write_array, item)
-                        item.future.set_result(index)
                     except Exception as exc:      # relay to the awaiting producer
                         item.future.set_exception(exc)
+                    else:
+                        item.future.set_result(index)
                 elif isinstance(item, _Metric):
+                    # unawaited by producers: a failure here fails the writer
                     await asyncio.to_thread(self._write_metric, item.line)
+        except Exception as exc:
+            self._note_failure(exc)
+            # Keep serving the queue so producers never park on a dead writer:
+            # every pending/incoming append future is resolved exceptionally.
+            while True:
+                item = await self._queue.get()
+                if item is _CLOSE:
+                    return
+                if isinstance(item, _Append) and not item.future.done():
+                    item.future.set_exception(WriterFailedError(
+                        f"RunWriter for {self.run_id} failed: {exc}"))
         finally:
-            await asyncio.to_thread(self._close_files)
+            try:
+                await asyncio.to_thread(self._close_files)
+            except Exception:
+                logger.exception("RunWriter {} file close failed", self.run_id)
 
     # ------------------------------------------------- blocking (to_thread)
     def _open_files(self) -> None:
@@ -207,7 +263,7 @@ class RunWriter:
         assert self._h5 is not None
         arr = item.array
         if item.dataset in self._h5:
-            ds = self._h5[item.dataset]
+            ds = cast(h5py.Dataset, self._h5[item.dataset])
             index = ds.shape[0]
             ds.resize(index + 1, axis=0)
             ds[index] = arr
@@ -226,7 +282,7 @@ class RunWriter:
             attrs_name = f"{item.dataset}__attrs"
             str_dtype = h5py.string_dtype("utf-8")
             if attrs_name in self._h5:
-                ads = self._h5[attrs_name]
+                ads = cast(h5py.Dataset, self._h5[attrs_name])
                 ads.resize(index + 1, axis=0)
                 ads[index] = item.attrs_json
             else:

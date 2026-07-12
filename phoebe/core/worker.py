@@ -14,7 +14,10 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
+from collections.abc import Callable
+
+from loguru import logger
 
 T = TypeVar("T")
 
@@ -151,13 +154,26 @@ class BlockingDeviceWorker:
             try:
                 result = fn(*args, **kwargs)
             except BaseException as exc:  # noqa: BLE001 - relayed to future
-                if fut is not None and loop is not None:
-                    loop.call_soon_threadsafe(_set_exception_if_pending, fut, exc)
+                self._relay(loop, fut, _set_exception_if_pending, exc)
             else:
-                if fut is not None and loop is not None:
-                    loop.call_soon_threadsafe(_set_result_if_pending, fut, result)
+                self._relay(loop, fut, _set_result_if_pending, result)
             if pump is not None:
                 pump()
+
+    def _relay(self, loop: asyncio.AbstractEventLoop | None,
+               fut: asyncio.Future | None, setter: Callable[..., None],
+               value: Any) -> None:
+        """Post a result to the loop without ever killing the worker thread:
+        a closed/stopped loop (shutdown race) is logged, not fatal — the
+        transports keep a reference to this worker and would otherwise hold a
+        dead thread forever (M-group)."""
+        if fut is None or loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(setter, fut, value)
+        except RuntimeError as exc:
+            logger.error("worker {}: cannot deliver result ({}); caller's loop "
+                         "is gone", self.name, exc)
 
 
 def _set_result_if_pending(fut: asyncio.Future, result: Any) -> None:
@@ -168,6 +184,11 @@ def _set_result_if_pending(fut: asyncio.Future, result: Any) -> None:
 def _set_exception_if_pending(fut: asyncio.Future, exc: BaseException) -> None:
     if not fut.done():
         fut.set_exception(exc)
+    else:
+        # the awaiting coroutine was cancelled — don't lose the device error
+        logger.opt(exception=exc).warning(
+            "worker call finished with an exception after its caller was "
+            "cancelled; error logged here so it is not silently dropped")
 
 
 class WorkerPool:

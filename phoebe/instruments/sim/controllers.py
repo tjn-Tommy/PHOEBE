@@ -12,7 +12,7 @@ import numpy as np
 
 from ...core.capability import InvocationContext
 from ...core.config import InstrumentConfig
-from ...core.contracts import InstrumentId, timestamps
+from ...core.contracts import timestamps
 from ...core.controller import (
     DeviceHealth,
     DeviceIdentity,

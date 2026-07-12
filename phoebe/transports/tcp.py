@@ -8,7 +8,7 @@ receives a small raw-I/O facade — the transport stays generic.
 from __future__ import annotations
 
 import socket
-from typing import Callable
+from collections.abc import Callable
 
 from ..core.errors import (
     InstrumentConnectionError,
@@ -65,6 +65,11 @@ class TcpScpiTransport:
     async def close(self) -> None:
         await self._worker.call(self._close_blocking)
 
+    async def invalidate(self) -> None:
+        """Drop the handle without protocol niceties — the reconnect hook for
+        a link known to be dead; the next ``open()`` rebuilds it."""
+        await self._worker.call(self._discard)
+
     async def write(self, command: str) -> None:
         await self._worker.call(self._write_blocking, command)
 
@@ -91,7 +96,7 @@ class TcpScpiTransport:
         except InstrumentConnectionError:
             self._discard()
             raise
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             self._discard()
             raise InstrumentTimeoutError(
                 f"timed out connecting to {self._host}:{self._port}") from exc
@@ -119,9 +124,10 @@ class TcpScpiTransport:
         sock = self._require_sock()
         try:
             sock.sendall(data)
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise InstrumentTimeoutError(f"timed out sending {label}") from exc
         except OSError as exc:
+            self._discard()                   # dead handle: next open() rebuilds
             raise InstrumentConnectionError(f"failed sending {label}: {exc}") from exc
 
     def _write_blocking(self, command: str) -> None:
@@ -136,14 +142,39 @@ class TcpScpiTransport:
         while not data.endswith(b"\n"):
             try:
                 chunk = sock.recv(self._buffer_size)
-            except socket.timeout as exc:
+            except TimeoutError as exc:
                 raise InstrumentTimeoutError("timed out waiting for reply") from exc
             except OSError as exc:
+                self._discard()
                 raise InstrumentConnectionError(f"socket read error: {exc}") from exc
             if not chunk:
+                self._discard()
                 raise InstrumentConnectionError("connection closed by device")
             data += chunk
         return data
+
+    def _recv_exact(self, n: int, label: str) -> bytes:
+        """Read exactly ``n`` bytes; a peer close or timeout raises instead of
+        busy-looping on empty recv() forever (H9)."""
+        sock = self._require_sock()
+        buf = bytearray()
+        while len(buf) < n:
+            try:
+                chunk = sock.recv(min(self._buffer_size, n - len(buf)))
+            except TimeoutError as exc:
+                raise InstrumentTimeoutError(
+                    f"timed out reading {label} ({len(buf)}/{n} bytes)") from exc
+            except OSError as exc:
+                self._discard()
+                raise InstrumentConnectionError(
+                    f"socket read error during {label}: {exc}") from exc
+            if not chunk:
+                self._discard()
+                raise InstrumentConnectionError(
+                    f"connection closed by device during {label} "
+                    f"({len(buf)}/{n} bytes)")
+            buf.extend(chunk)
+        return bytes(buf)
 
     def _query_blocking(self, command: str) -> str:
         self._send(f"{command}\r\n".encode("ascii"), repr(command))
@@ -157,27 +188,26 @@ class TcpScpiTransport:
 
     def _query_binary_blocking(self, command: str) -> bytes:
         self._send(f"{command}\r\n".encode("ascii"), repr(command))
-        sock = self._require_sock()
-        # read the '#' + digit-count + length header, then exactly length bytes
-        header = b""
-        while len(header) < 2:
-            header += sock.recv(2 - len(header))
+        # read the '#' + digit-count + length header, then exactly length bytes;
+        # every read detects peer close and maps timeouts (H9)
+        header = self._recv_exact(2, "IEEE block header")
         if not header.startswith(b"#"):
             # not a block: fall back to line read and let the parser complain
             rest = self._recv_line()
             return parse_ieee_block(header + rest)
         ndigits = int(header[1:2])
-        length_bytes = b""
-        while len(length_bytes) < ndigits:
-            length_bytes += sock.recv(ndigits - len(length_bytes))
-        length = int(length_bytes)
-        payload = bytearray()
-        while len(payload) < length:
-            chunk = sock.recv(min(self._buffer_size, length - len(payload)))
-            if not chunk:
-                raise InstrumentProtocolError("binary block truncated")
-            payload.extend(chunk)
+        if ndigits == 0:
+            raise InstrumentProtocolError(
+                "indefinite-length IEEE block (#0) is not supported")
+        length_bytes = self._recv_exact(ndigits, "IEEE block length")
+        try:
+            length = int(length_bytes)
+        except ValueError as exc:
+            raise InstrumentProtocolError(
+                f"bad IEEE block length {length_bytes!r}") from exc
+        payload = self._recv_exact(length, "IEEE block payload") if length else b""
         # consume the trailing newline if present
+        sock = self._require_sock()
         try:
             sock.settimeout(0.1)
             sock.recv(2)
@@ -185,4 +215,4 @@ class TcpScpiTransport:
             pass
         finally:
             sock.settimeout(self._timeout)
-        return bytes(payload)
+        return payload

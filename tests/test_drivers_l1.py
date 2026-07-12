@@ -2,7 +2,6 @@
 (refactor.md §14.1)."""
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from phoebe.core.capability import SystemContext
@@ -34,8 +33,8 @@ def osa_rules() -> dict[str, str]:
     return {
         "*IDN?": "YOKOGAWA,AQ6370D,90Y1234,02.08",
         ":STATus:OPERation:EVENt?": "1",
-        f":TRACe:X? TRA": f"{n}, {x_m}",
-        f":TRACe:Y? TRA": f"{n}, {y}",
+        ":TRACe:X? TRA": f"{n}, {x_m}",
+        ":TRACe:Y? TRA": f"{n}, {y}",
     }
 
 

@@ -1,15 +1,59 @@
 """PyVISA-backed SCPI transport (imports pyvisa lazily; real backend only).
 
 Blocking VISA calls run on the device's worker thread (refactor.md §12.3).
+
+Binary downloads use ``read_bytes()`` field by field instead of ``read_raw()``:
+with ``read_termination="\\n"`` several backends stop a raw read at any 0x0A
+byte, and float32 waveform payloads contain one every ~256 bytes (H8).
 """
 from __future__ import annotations
 
+from typing import Any
+
 from ..core.errors import (
     InstrumentConnectionError,
+    InstrumentProtocolError,
     InstrumentTimeoutError,
 )
-from ..core.transport import make_ieee_block, parse_ieee_block
+from ..core.transport import make_ieee_block
 from ..core.worker import BlockingDeviceWorker
+
+
+def read_ieee_block_bytes(inst: Any) -> bytes:
+    """Read one IEEE 488.2 definite-length block with exact-count reads.
+
+    ``inst`` is an open pyvisa MessageBasedResource (typed ``Any`` to keep the
+    lazy-import rule).  Raises InstrumentProtocolError on malformed headers.
+    """
+    first = inst.read_bytes(1)
+    while first in (b"\n", b"\r", b" "):        # stale terminator from a prior reply
+        first = inst.read_bytes(1)
+    if first != b"#":
+        raise InstrumentProtocolError(f"no IEEE block header in reply: {first!r}")
+    ndigits_raw = inst.read_bytes(1)
+    if not ndigits_raw.isdigit():
+        raise InstrumentProtocolError(f"bad IEEE block digit count: {ndigits_raw!r}")
+    ndigits = int(ndigits_raw)
+    if ndigits == 0:
+        raise InstrumentProtocolError(
+            "indefinite-length IEEE block (#0) is not supported")
+    length_raw = inst.read_bytes(ndigits)
+    try:
+        length = int(length_raw)
+    except ValueError as exc:
+        raise InstrumentProtocolError(f"bad IEEE block length {length_raw!r}") from exc
+    payload = inst.read_bytes(length) if length else b""
+    # consume the trailing terminator so the next plain query starts clean;
+    # bounded by a short timeout in case the device sends nothing more
+    old_timeout = inst.timeout
+    try:
+        inst.timeout = 100                       # ms
+        inst.read_bytes(1)
+    except Exception:
+        pass
+    finally:
+        inst.timeout = old_timeout
+    return payload
 
 
 class VisaScpiTransport:
@@ -52,6 +96,10 @@ class VisaScpiTransport:
 
     async def query_binary(self, command: str) -> bytes:
         return await self._worker.call(self._query_binary_blocking, command)
+
+    async def invalidate(self) -> None:
+        """Drop the handle — the reconnect hook; the next ``open()`` rebuilds."""
+        await self._worker.call(self._close_blocking)
 
     # ---- blocking implementations (worker thread only) -------------------------
     def _open_blocking(self) -> None:
@@ -105,6 +153,9 @@ class VisaScpiTransport:
             pass
         if "timeout" in str(exc).lower():
             return InstrumentTimeoutError(f"timed out on {label}")
+        # connection-level trouble: drop the dead handle so a reconnect can
+        # rebuild it instead of erroring on it forever
+        self._close_blocking()
         return InstrumentConnectionError(f"VISA error on {label}: {exc}")
 
     def _write_blocking(self, command: str) -> None:
@@ -131,7 +182,8 @@ class VisaScpiTransport:
         inst = self._require()
         try:
             inst.write(command)
-            raw = inst.read_raw()
+            return read_ieee_block_bytes(inst)      # termchar-safe (H8)
+        except InstrumentProtocolError:
+            raise
         except Exception as exc:
             raise self._map_exc(exc, repr(command)) from exc
-        return parse_ieee_block(raw)

@@ -17,10 +17,27 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, get_type_hints
+from typing import Any, get_type_hints
+from collections.abc import Callable
 
 from .contracts import InstrumentId
 from .errors import PhoebeConfigError
+
+
+class DependencyResolutionError(PhoebeConfigError):
+    """A plugin's Depends() parameters could not be bound to instruments.
+    Subclasses give the admission chain its typed rejection codes (plan §6.4)
+    — never classified by message text."""
+
+
+class MissingRoleError(DependencyResolutionError):
+    """A parameter names a role that no configured instrument has."""
+
+
+class KindMismatchError(DependencyResolutionError):
+    """The annotation is not a capability protocol, no device provides the
+    kind, or the kind is ambiguous without a role binding."""
+
 
 # Explicit protocol → kind table, filled by phoebe.instruments.protocols.
 _KIND_BY_PROTOCOL: dict[type, str] = {}
@@ -81,7 +98,7 @@ class DependencyResolver:
             annotation = hints.get(name, param.annotation)
             kind = _KIND_BY_PROTOCOL.get(annotation)
             if kind is None:
-                raise PhoebeConfigError(
+                raise KindMismatchError(
                     f"{plugin_id}: parameter {name!r} is Depends() but its annotation "
                     f"{annotation!r} is not a registered capability protocol"
                 )
@@ -89,7 +106,7 @@ class DependencyResolver:
             if role is not None:
                 instrument_id = self._role_map.get(role)
                 if instrument_id is None:
-                    raise PhoebeConfigError(
+                    raise MissingRoleError(
                         f"{plugin_id}: parameter {name!r} wants role {role!r} "
                         f"but no configured instrument has that role"
                     )
@@ -98,12 +115,12 @@ class DependencyResolver:
                 if len(candidates) == 1:
                     instrument_id = candidates[0]
                 elif not candidates:
-                    raise PhoebeConfigError(
+                    raise KindMismatchError(
                         f"{plugin_id}: no configured instrument provides {kind!r} "
                         f"needed by parameter {name!r}"
                     )
                 else:
-                    raise PhoebeConfigError(
+                    raise KindMismatchError(
                         f"{plugin_id}: {kind!r} is ambiguous ({len(candidates)} devices); "
                         f"bind parameter {name!r} via Depends(role=...) or "
                         f"[plugins.\"{plugin_id}\".bindings]"

@@ -72,6 +72,10 @@ class SlmDllDriver:
         self.flags = FLAGS_RATE120 if rate120 else 0
         self.dll: ctypes.CDLL | None = None
         self.is_open = False
+        # Temp-CSV ledger (H10): every frame CSV is deleted right after the
+        # DLL consumed it; entries that resist deletion (AV scanner holding
+        # the file, ...) are retried on later sweeps and at close.
+        self._temp_ledger: set[Path] = set()
 
     # ---- lifecycle (worker thread) --------------------------------------------
     def load(self) -> None:
@@ -158,6 +162,7 @@ class SlmDllDriver:
         self.is_open = True
 
     def close_display(self) -> None:
+        self._sweep_temp_ledger()
         ret = self._require().SLM_Disp_Close(self.display_no)
         self.is_open = False
         self._check(ret, "SLM_Disp_Close")
@@ -174,14 +179,32 @@ class SlmDllDriver:
         self._check(ret, "SLM_Disp_GrayScale")
 
     def display_frame(self, frame: np.ndarray) -> Path:
-        """Write ``frame`` to a temp CSV and load it — one worker-thread job so
-        the (blocking) CSV write never touches the event loop."""
+        """Write ``frame`` to a temp CSV, load it, delete it — one worker-thread
+        job so the (blocking) CSV write never touches the event loop.
+
+        SLM_Disp_ReadCSV consumes the file synchronously, so it is garbage the
+        moment the call returns; without deletion a 10k-iteration optimization
+        leaks ~90 GB of CSVs into %TEMP% (H10)."""
         handle = tempfile.NamedTemporaryFile(
             mode="w", suffix=".csv", prefix="phoebe_slm_", delete=False)
         handle.close()
-        path = write_santec_csv(frame, handle.name)
-        self.load_csv(str(path))
+        path = Path(handle.name)
+        self._temp_ledger.add(path)
+        try:
+            path = Path(write_santec_csv(frame, handle.name))
+            self._temp_ledger.add(path)
+            self.load_csv(str(path))
+        finally:
+            self._sweep_temp_ledger()
         return path
+
+    def _sweep_temp_ledger(self) -> None:
+        for path in list(self._temp_ledger):
+            try:
+                path.unlink(missing_ok=True)
+                self._temp_ledger.discard(path)
+            except OSError:
+                pass                 # still locked: retried on the next sweep
 
     # ---- USB control path ------------------------------------------------------
     def set_video_mode(self, mode: int, slm_number: int = 1,

@@ -1,4 +1,5 @@
-"""EventBus fan-out/drop/retained semantics (§9) and worker threads (§12.3)."""
+"""EventBus fan-out/drop/retained semantics (§9; v2 per plan §6.5) and worker
+threads (§12.3)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,14 +8,29 @@ import threading
 import pytest
 
 from phoebe.core.bus import DropPolicy, EventBus, ThrottledEmitter
-from phoebe.core.contracts import timestamps
+from phoebe.core.contracts import InstrumentId, TaskId, timestamps
 from phoebe.core.errors import BusOverflowError
-from phoebe.core.events import ProgressEvent, RunState, RunStateEvent
+from phoebe.core.events import (
+    DeviceHealthEvent,
+    LogEvent,
+    ProgressEvent,
+    RunState,
+    RunStateEvent,
+)
 from phoebe.core.worker import BlockingDeviceWorker, WorkerPool
 
 
 def _progress(step: int) -> ProgressEvent:
     return ProgressEvent(step=step, **timestamps())
+
+
+def _health(iid: str, status: str = "ok") -> DeviceHealthEvent:
+    return DeviceHealthEvent(instrument_id=InstrumentId(iid), status=status,
+                             **timestamps())
+
+
+def _run_state(task: str, state: RunState) -> RunStateEvent:
+    return RunStateEvent(task_id=TaskId(task), state=state, **timestamps())
 
 
 async def test_fanout_and_seq_stamping():
@@ -49,13 +65,99 @@ async def test_drop_oldest_counts_drops():
     assert bus.total_dropped() == 3
 
 
-async def test_error_policy_raises_on_overflow():
+async def test_error_policy_fails_subscription_not_publisher():
+    """Plan §6.5: an ERROR-policy overflow detaches the subscription and is
+    counted; the publisher (and every other subscriber) is untouched."""
     bus = EventBus()
     bus.bind_loop()
-    bus.subscribe(["progress"], maxsize=1, policy=DropPolicy.ERROR)
+    fragile = bus.subscribe(["progress"], maxsize=1, policy=DropPolicy.ERROR)
+    healthy = bus.subscribe(["progress"], maxsize=64)
     bus.publish(_progress(0))
+    bus.publish(_progress(1))          # overflows `fragile` — must NOT raise here
+    bus.publish(_progress(2))
+    assert fragile.failed
+    assert bus.stats().failed_subscriptions == 1
+    # the failed consumer observes the overflow as its own error
     with pytest.raises(BusOverflowError):
+        while True:
+            await asyncio.wait_for(fragile.get(), 1.0)
+    # the healthy subscriber saw everything
+    steps = [(await healthy.get()).step for _ in range(3)]
+    assert steps == [0, 1, 2]
+
+
+async def test_per_entity_retained_snapshot_for_late_subscriber():
+    """Reconnect snapshot (plan C-1 acceptance): a late subscriber receives
+    one retained event per entity — every device, every task — in seq order."""
+    bus = EventBus()
+    bus.bind_loop()
+    bus.publish(_health("osa.main", "ok"))
+    bus.publish(_health("slm.primary", "degraded"))
+    bus.publish(_health("osa.main", "error"))          # newer state, same entity
+    bus.publish(_run_state("task_a", RunState.RUNNING))
+    bus.publish(_run_state("task_b", RunState.COMPLETED))
+
+    late = bus.subscribe(["device_health", "run_state"], maxsize=64)
+    snapshot = []
+    while (ev := late.get_nowait()) is not None:
+        snapshot.append(ev)
+    healths = {str(e.instrument_id): e.status for e in snapshot
+               if e.event_type == "device_health"}
+    states = {str(e.task_id): e.state for e in snapshot
+              if e.event_type == "run_state"}
+    assert healths == {"osa.main": "error", "slm.primary": "degraded"}
+    assert states == {"task_a": RunState.RUNNING, "task_b": RunState.COMPLETED}
+    assert [e.seq for e in snapshot] == sorted(e.seq for e in snapshot)
+
+
+async def test_replay_since_seq():
+    bus = EventBus()
+    bus.bind_loop()
+    for i in range(5):
+        bus.publish(_progress(i))
+    cutoff = bus.current_seq                            # after step 4
+    bus.publish(_progress(5))
+    bus.publish(_health("osa.main"))
+
+    replayed = bus.replay_since(cutoff)
+    assert [getattr(e, "step", None) for e in replayed] == [5, None]
+    only_progress = bus.replay_since(cutoff, topics=["progress"])
+    assert [e.step for e in only_progress] == [5]
+
+    # subscribe(since_seq=...) primes the queue from the ring, not the snapshot
+    sub = bus.subscribe(["progress"], since_seq=cutoff)
+    assert (sub.get_nowait()).step == 5
+    assert sub.get_nowait() is None
+
+
+async def test_oversize_event_is_dropped_and_counted_in_prod(monkeypatch):
+    """Plan §6.5: the 64 KB ceiling is a real check.  Schema caps make a
+    genuinely oversized event unconstructible, so the ceiling itself is
+    lowered to drive the enforcement path."""
+    import phoebe.core.bus as bus_mod
+
+    bus = EventBus(dev_mode=False)
+    bus.bind_loop()
+    sub = bus.subscribe(["log", "progress"], maxsize=8)
+    bus.publish(LogEvent(message="small", **timestamps()))
+    monkeypatch.setattr(bus_mod, "MAX_EVENT_JSON_BYTES", 64)
+    bus.publish(_progress(3))                            # > 64 bytes → dropped
+    assert bus.stats().oversize_dropped == 1
+    got = []
+    while (ev := sub.get_nowait()) is not None:
+        got.append(ev)
+    assert [e.event_type for e in got] == ["log"]        # progress never delivered
+
+
+async def test_oversize_event_raises_in_dev_mode(monkeypatch):
+    import phoebe.core.bus as bus_mod
+
+    bus = EventBus(dev_mode=True)
+    bus.bind_loop()
+    monkeypatch.setattr(bus_mod, "MAX_EVENT_JSON_BYTES", 64)
+    with pytest.raises(ValueError, match="RunWriter"):
         bus.publish(_progress(1))
+    assert bus.stats().oversize_dropped == 1
 
 
 async def test_threadsafe_publish_from_worker_thread():

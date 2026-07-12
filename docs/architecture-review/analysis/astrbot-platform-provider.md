@@ -1,0 +1,102 @@
+# Panel report — AstrBot adapter abstraction layers (platform adapters + LLM providers)
+
+Scope: `astrbot/core/platform/` (framework files read fully; `sources/telegram/tg_adapter.py` read fully as exemplar; `sources/kook/` skimmed for reconnection) and `astrbot/core/provider/` (manager, register, entities, provider base, `openai_source.py` read fully, `request_retry.py` read fully).
+
+## 1. Design inventory
+
+### 1.1 Registration: decorator + global registry + metadata dataclass
+
+Adapters self-register via a parameterized class decorator `@register_platform_adapter(name, desc, default_config_tmpl=..., support_streaming_message=..., config_metadata=...)` which appends a `PlatformMetadata` dataclass to a module-level `platform_registry` list and maps name→class in `platform_cls_map` (`astrbot/core/platform/register.py:5-63`). Duplicate names raise at registration (`register.py:29-32`). The decorator also patches required keys (`type`, `enable`, `id`) into the default config template (`register.py:35-41`) and records `cls.__module__` so plugin-provided adapters can be bulk-unregistered by module-path prefix on plugin hot-reload (`register.py:66-91`). Providers use the identical pattern with a `ProviderType` enum discriminator (CHAT_COMPLETION/STT/TTS/EMBEDDING/RERANK) (`astrbot/core/provider/register.py:14-53`, `entities.py:27-32`).
+
+`PlatformMetadata` carries UI-facing metadata: display name, logo path, i18n resources, and `config_metadata` used by the WebUI to auto-generate config forms (`astrbot/core/platform/platform_metadata.py:4-37`). Capability flags are plain booleans on the metadata: `support_streaming_message`, `support_proactive_message` (`platform_metadata.py:20-23`).
+
+**Problem solved:** ~17 IM platforms and ~50 provider sources, each addable (including by third-party plugins) without touching a central switch — except they *do* also touch a central switch, see 1.2.
+
+### 1.2 Instantiation: config-driven, lazy vendor-SDK import via match/case
+
+`PlatformManager.load_platform(platform_config)` triggers the decorator side effect by importing the adapter module inside a `match platform_config["type"]` block with one `case` per builtin adapter (`astrbot/core/platform/manager.py:130-196`), catching `ImportError` with a user-facing "install the pip dependency from the admin panel" message (`manager.py:197-200`). It then looks up `platform_cls_map` and instantiates with a positional convention `cls_type(platform_config, self.settings, self.event_queue)` (`manager.py:204-210`). `ProviderManager.dynamic_import_provider` is the same pattern at ~150 lines (`astrbot/core/provider/manager.py:350-505`). Observed fact: all vendor SDKs (telegram, slack-sdk, lark-oapi, py-cord, anthropic, google-genai, openai…) are *hard* dependencies in `pyproject.toml:11-71` — there is no extras mechanism — so lazy import here buys startup latency and tolerance of broken installs, not optional installation.
+
+Providers get one extra nicety: after construction, an optional async `initialize()` is detected via a `@runtime_checkable` Protocol `HasInitialize` and awaited (`provider/manager.py:26-28, 638-639, 687-688`) — a clean way to give adapters async setup without forcing it on all.
+
+### 1.3 Abstract base contract and lifecycle
+
+`Platform` (ABC) requires only `run() -> Coroutine` and `meta() -> PlatformMetadata`; `terminate()` is an optional no-op override (`astrbot/core/platform/platform.py:121-132, 126-127`). The base owns operational state: a `PlatformStatus` enum (PENDING/RUNNING/ERROR/STOPPED), an error list of `PlatformError(message, timestamp, traceback)`, `record_error()`/`clear_errors()`, started-at timestamp, and a `get_stats()` dict consumed by the dashboard (`platform.py:20-119`). Inbound flow is uniform: adapter converts a vendor message to `AstrBotMessage` (`astrbot_message.py:50-89`), wraps it in an event, and `commit_event()` does `put_nowait` onto a shared (unbounded) asyncio queue (`platform.py:147-149`).
+
+The manager runs each adapter as *two* tasks: the `run()` task plus a wrapper task that awaits it, sets status RUNNING on start, STOPPED on cancel, and on any exception logs the traceback and calls `platform.record_error()` (`manager.py:49-58, 232-254`). Critically, the manager does **not** restart a crashed adapter — supervision-to-restart is fully delegated to each adapter's own `run()` loop.
+
+### 1.4 Reconnection (the part that matters most)
+
+Two independently-evolved implementations:
+
+- **Telegram** (`sources/telegram/tg_adapter.py`): `run()` is a `while not self._terminating` loop that (re)starts the SDK application, then watchdogs it with a 1-second poll of `updater.running` (`tg_adapter.py:230-286`). A network-error callback counts consecutive failures within a 60 s window; at threshold 3 it sets a recovery event **thread-safely via `loop.call_soon_threadsafe`** (the callback may fire off-loop) which causes the loop to tear down and rebuild the entire HTTP client/application (`tg_adapter.py:288-319, 181-194`). Restart delay is a fixed configurable value, clamped to ≥0.1 s to avoid tight loops (`tg_adapter.py:98-116`) — no exponential backoff. Fatal errors are classified: `Forbidden`/`InvalidToken` breaks the loop permanently instead of retrying (`tg_adapter.py:270-274`). Shutdown is a defensive cascade of `with suppress(Exception)` around each teardown step (`tg_adapter.py:157-179`).
+- **KOOK** (`sources/kook/`): adapter main loop with true exponential backoff `min(2**consecutive_failures, max_retry_delay)` and a give-up ceiling `max_consecutive_failures` (`kook_adapter.py:128-187`); the client beneath it implements heartbeat ping/pong with jittered interval, failure counting, and session-resume (`sn`/`session_id` replay cursor) on reconnect (`kook_client.py:108-142, 297-338`). Connection-end is signaled to the adapter via an `asyncio.Event` + `wait_until_closed()` (`kook_client.py:440-442`).
+
+- **Providers**: a third, cleaner implementation — `request_retry.py` builds a tenacity `AsyncRetrying` with exponential wait (0.2–30 s), a retryability classifier (connection errors, `APIConnectionError`/`APITimeoutError` by type-name string, HTTP status in {408,409,429,5xx}), per-provider labeled logging, and a context-manager variant so *streaming* connection setup is retryable too (`sources/request_retry.py:19-128, 131-163`).
+
+### 1.5 Session identity: the `platform_id:message_type:session_id` string
+
+`MessageSession` is a dataclass whose `__str__` renders `f"{platform_id}:{message_type.value}:{session_id}"` and which parses back via `split(":", 2)` (`astrbot/core/platform/message_session.py:6-27`). Every event exposes it as `unified_msg_origin` (a property over the structured object, `astr_message_event.py:103-112`) and it is the persistence/keying currency for conversations, per-session provider preferences (`provider/manager.py:159-168`), etc. Honest assessment: the *structured-object-with-canonical-string-form* is right, but the delimiter leaks into validation — the manager must forbid `:` and `!` in platform IDs and silently rewrites them (`platform/manager.py:38-47`); the first field is named `platform_name` but actually stores `platform_id` since v4 with a docstring apologizing (`message_session.py:12-13`); and a typo alias `MessageSesion = MessageSession` is kept for back-compat and used in *new* signatures (`message_session.py:30`, `platform.py:136`).
+
+### 1.6 Provider normalization and capability negotiation
+
+All five provider kinds share `AbstractProvider` (config, model name, `meta()`, async `test()`), then each kind adds its own abstract surface: `Provider.text_chat`/`text_chat_stream` returning a normalized `LLMResponse`, `STTProvider.get_text`, `TTSProvider.get_audio`, etc. (`provider/provider.py:27-63, 66-172, 214-317`). Normalization is aggressive: `openai_source._normalize_content` handles str, dict, content-part lists, and even JSON/Python-literal-encoded lists smuggled inside strings (`sources/openai_source.py:727-815`); `_sanitize_assistant_messages` repairs message histories that strict APIs reject (`openai_source.py:435-513`); `_finally_convert_payload` holds per-model quirk tables (DeepSeek/MiMo reasoning fields, Gemini tool-JSON wrapping) (`openai_source.py:976-1044`).
+
+Capability handling is three-layered:
+- **Declared**: user-configured `modalities` list (`image`/`audio`/`tool_use`) on the provider config; a pure function `sanitize_contexts_by_modalities` degrades unsupported content to text placeholders and returns a stats object (`provider/modalities.py:37-122`); a method flag `TTSProvider.support_stream()` defaults False (`provider.py:240-249`).
+- **Selected**: at request-build time, if the request has images and the chosen provider lacks the `image` modality, an image-capable fallback provider is substituted (`astrbot/core/astr_main_agent.py:1320-1351`).
+- **Discovered by failure**: `_handle_api_error` string-matches exception text — "429" rotates to another API key; "context length" pops history; "not a VLM"/moderation strips images; "Function calling is not enabled" drops tools and retries (`openai_source.py:1046-1158`), with the code itself admitting string matching is the only option (`openai_source.py:1138`).
+
+**Failover:** cross-provider failover lives above the provider, in the agent runner: candidates = `[primary, *fallback_providers]`, each wrapped in tenacity retry on `EmptyModelOutputError`, advancing to the next provider on error responses — but only if streaming output hasn't already started (`agent/runners/tool_loop_agent_runner.py:481-549`; fallback list resolved from config at `astr_main_agent.py:1285-1317`).
+
+### 1.7 Hot add/remove at runtime
+
+`PlatformManager.reload(platform_config)`: terminate by id → re-load if enabled → sweep instances whose ids vanished from config (`platform/manager.py:256-265`). Termination cancels both tasks and gathers with `return_exceptions=True` after calling the adapter's duck-typed `terminate()` (`manager.py:60-85`). `ProviderManager` adds full CRUD (`create/update/delete_provider`) that mutates the config, saves it, and reloads the instance under an `asyncio.Lock` (`provider/manager.py:736-877`); provider reload also re-elects "current" defaults when the removed instance was selected (`provider/manager.py:751-777, 801-806`).
+
+### 1.8 Health checks
+
+Each provider kind has a type-appropriate cheap `test()`: chat = "REPLY PONG ONLY" with 45 s timeout, STT = transcribe a bundled sample WAV, TTS = synthesize "hi" and assert a non-empty file, embedding = embed one word, rerank = two documents (`provider/provider.py:207-211, 225-231, 299-317, 341-342, 428-431`).
+
+## 2. Quality observations
+
+**Genuinely clean:** `request_retry.py` (single classifier, backoff, stream-aware context variant) is the best file in the assignment. `modalities.py` (pure function + stats dataclass, no I/O). The `Platform` base's status/error bookkeeping (`platform.py:20-119`). The `HasInitialize` runtime Protocol trick. `MessageSession` as structured-object-with-string-form. The two-task wrapper + `PlatformTasks` dataclass (`platform/manager.py:16-20`).
+
+**Organically grown / accidental complexity — do not copy:**
+- *Dual bookkeeping for registration*: adding a builtin adapter requires both the decorator **and** a new `match` arm in the manager (`platform/manager.py:130-196`; `provider/manager.py:350-505`). The metadata already records `module_path` (`platform_metadata.py:25-26`); an importlib-by-path design would eliminate ~250 lines of switch.
+- *Three divergent retry stacks* (telegram fixed-delay + window-threshold rebuild; KOOK hand-rolled exponential backoff; tenacity for providers) solving one problem, plus a fourth ad-hoc retry in `get_embeddings_batch` (`provider.py:374-390`).
+- *`_handle_api_error` threads a 7-tuple of mutable state* (`success, chosen_key, available_api_keys, payloads, context_query, func_tool, image_fallback_used`) through the retry loop (`openai_source.py:1046-1158, 317-342`), and near-identical payload/extra_body plumbing is duplicated between `_query` and `_query_stream` with the operation order subtly swapped (`openai_source.py:532-546` vs `591-606`).
+- *Latent bug (inference from reading, not executed)*: in `text_chat`, success on the final retry (`break` at `retry_cnt == max_retries-1`) still enters the failure branch `if retry_cnt == max_retries - 1 or llm_response is None` and re-raises (`openai_source.py:1198-1236`). UNCERTAIN whether reachable in practice (needs 9 recoverable failures then success); a unit test would confirm.
+- *Layering leak in shared entities*: `entities.py` imports `anthropic.types`, `google.genai.types`, and `openai.types` **eagerly at module top** to type the `raw_completion` escape hatch (`provider/entities.py:8-10, 313-315`) — the one shared contract module drags in every vendor SDK. Similarly `AstrBotMessage.raw_message: object` (`astrbot_message.py:61`) and events carrying live vendor clients (`tg_adapter.py:748-754`) are the deliberate escape hatches by which platform types travel upward.
+- *Bookkeeping triplication in ProviderManager*: per-type instance lists + `inst_map` + three deprecated `curr_*` pointers all manually kept consistent across load/reload/terminate (`provider/manager.py:52-75, 782-814`).
+- *Inconsistent locking*: provider reload takes `reload_lock` (`provider/manager.py:737`), platform reload takes nothing (`platform/manager.py:256`).
+- *Unbounded error history* on flapping adapters (`platform.py:74-77` appends forever) and unbounded event queue (`platform.py:149`).
+- Back-compat sediment: `entites.py` typo shim (`provider/entites.py:1-19`), `MessageSesion` alias, deprecated `session_id` params retained in every signature (`provider.py:99, 139`).
+
+## 3. Transferability triage
+
+**(a) Directly adoptable**
+
+1. **Retryability classifier + single shared backoff utility** (`request_retry.py:19-128`). Phoebe's transports need exactly this shape: one function that classifies VISA timeouts/`ConnectionError`/bus errors as transient vs. fatal, tenacity backoff, per-instrument labels, and a context-manager variant for long-lived acquisitions. This is the single highest-value file. AstrBot's *three* divergent adapter-level reimplementations are the cautionary tale for not doing it early.
+2. **Fatal-vs-transient classification in the reconnect loop** (`tg_adapter.py:270-274`): wrong resource address / missing DLL / bad credentials must break the loop and surface, not retry forever. Maps directly to Phoebe controller connect logic.
+3. **Base-class operational state**: status enum + capped error ring + started-at + `get_stats()` (`platform.py:20-119`) belongs on Phoebe's `Controller` base for the UI/diagnostics; it costs nothing and Phoebe's planned Vue frontend will want exactly `PlatformManager.get_all_stats()` aggregation (`platform/manager.py:309-350`). Adaptation: cap the error list.
+4. **Type-appropriate cheap health probes** (`provider.py:207-211, 225-317`): `test()` per capability kind → an OSA "identify + minimal sweep," DAQ "read one sample," etc., invocable from the UI. Fits Phoebe's settled-semantics model since the probe goes through the controller op-lock.
+5. **Optional async `initialize()` via runtime-checkable Protocol** (`provider/manager.py:26-28, 638`): matches Phoebe's Protocol-based capability style.
+6. **Config-metadata-driven UI forms** (`platform_metadata.py:33-37`, `register.py:25`): per-driver config schema shipped with registration so the frontend renders forms generically — directly useful for Tauri UI over per-instrument TOML options; Phoebe can generate it from its existing pydantic option models instead of hand-written dicts.
+
+**(b) Adoptable with adaptations**
+
+1. **Threshold-triggered full client rebuild** (`tg_adapter.py:288-319, 181-194`): N consecutive failures within a T-second window → tear down and rebuild the session/handle, with the trigger signaled thread-safely (`call_soon_threadsafe` on an `asyncio.Event`) because the failure callback fires off-loop. For Phoebe this maps to reopening a VISA session or recycling a vendor-DLL worker; the thread-safe event-flag pattern matches Phoebe's `BlockingDeviceWorker` boundary. Adaptation: the rebuild must execute *on the device worker thread* (Santec DLL affinity), and use exponential backoff (KOOK's `min(2**n, max)` with a give-up ceiling, `kook_adapter.py:168-177`) rather than telegram's fixed delay.
+2. **Delegated supervision (manager spawns task + wrapper; adapter owns its reconnect loop)** (`platform/manager.py:49-58, 232-254`): reasonable for Phoebe because reconnect policy is genuinely per-transport — but adopt with a shared policy object injected into controllers, or every driver author reinvents it (AstrBot's outcome). Also note the manager records the crash but never restarts; Phoebe should decide explicitly whether a crashed controller is restartable or requires operator action.
+3. **Hot add/remove keyed by config id with orphan sweep** (`platform/manager.py:256-265`; `provider/manager.py:736-877`): fits Phoebe's runtime instrument (re)configuration. Adaptations: take a lock (copy the provider manager, not the platform manager), and gate teardown on Phoebe's lease system — an instrument mid-run must drain (423 semantics) before `terminate()`, a constraint chat adapters don't have.
+4. **Structured identity with canonical string form** (`message_session.py:6-27`): adopt the *shape* (frozen model + `__str__`/`from_str`) for instrument/lease/run identities, but make it a `ContractModel` and pick an encoding that doesn't require sanitizing user-chosen ids (`platform/manager.py:38-47` shows the cost of a raw `:` join).
+5. **Normalized response with raw escape hatch** (`entities.py:294-327`): a driver-agnostic measurement/result model with an optional `raw` field is useful for debugging, but the raw field must be typed `Any`/opaque and vendor types must never be imported in the shared module (`entities.py:8-10` is the anti-example; Phoebe's CLAUDE.md lazy-import rule already forbids this — AstrBot demonstrates why).
+6. **Graceful capability degradation as a pure function** (`modalities.py:37-122`): the pattern — declared capabilities + a testable pure transform + a stats object logged when it changed anything — transfers to, e.g., downsampling a request to fit an instrument's limits. Adaptation: Phoebe's capabilities should come from typed Protocols/driver introspection, not user-edited string lists.
+
+**(c) Unsuitable — chat-domain assumptions**
+
+1. **Provider failover chains and API-key rotation** (`tool_loop_agent_runner.py:481-549`; `openai_source.py:1059-1079`): works because LLM backends are stateless, fungible, and a retried request is merely wasteful. Instruments are stateful physical hardware; silently rerouting a command to "another scope" or auto-retrying a state-mutating command is dangerous. Phoebe's equivalents (retry idempotent reads, never auto-substitute devices) must be opt-in per command class.
+2. **Error-string-matching capability discovery** (`openai_source.py:1046-1158`): a rational response to hundreds of loosely OpenAI-compatible endpoints; instruments have deterministic error queues/status registers (SCPI `SYST:ERR?`), so Phoebe should classify by code, never by message text.
+3. **`put_nowait` onto an unbounded shared event queue** (`platform.py:147-149`): acceptable for chat volumes; contradicts Phoebe's bounded-queue/data-plane discipline.
+4. **The match/case lazy-import switchboard** (`platform/manager.py:130-196`): with ~5 instrument kinds and typed factories, Phoebe's existing `(kind, vendor, model)` registry is already better; do not import this mechanism.
+5. Webhook-unification, media-group debouncing (`tg_adapter.py:627-737`), message-chain conversion — messaging-specific, no instrument analog.
+
+**Extension pain points / notable ideas:** the recurring AstrBot pain is *N implementations of the same operational concern* (retry, backoff, teardown) because the base class specifies only `run()`/`terminate()` and provides no lifecycle machinery — Phoebe's base `Controller` should own the reconnect/backoff/status skeleton and let drivers supply only classify-error and rebuild-handle hooks. The one AstrBot idea Phoebe lacks today and should note: adapter metadata carrying UI form schemas and per-adapter display assets at registration time, which is what lets AstrBot's frontend manage 17 platforms with zero frontend code per adapter.

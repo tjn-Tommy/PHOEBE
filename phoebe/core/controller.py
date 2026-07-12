@@ -14,45 +14,36 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Literal
+from collections import deque
 
-from pydantic import Field
-
+# Serializable instrument models were promoted to phoebe.contracts.instruments
+# (plan §6.7); re-imported here so pre-promotion import paths keep working.
+from ..contracts.instruments import (
+    ControllerStats,
+    DeviceHealth,
+    DeviceIdentity,
+    DeviceStatusView,
+    InstrumentDescriptor,
+    InstrumentSnapshot,
+    SnapshotValue,
+)
 from .capability import CapabilityRegistry
-from .contracts import AwareDatetime, ContractModel, InstrumentId, utc_now
+from .contracts import InstrumentId, utc_now
 
+__all__ = [
+    "ControllerStats",
+    "DeviceHealth",
+    "DeviceIdentity",
+    "DeviceStatusView",
+    "InstrumentController",
+    "InstrumentDescriptor",
+    "InstrumentSnapshot",
+    "SnapshotValue",
+]
 
-class InstrumentDescriptor(ContractModel):
-    instrument_id: InstrumentId
-    kind: str
-    vendor: str
-    model: str
-    provides: tuple[str, ...]        # declared base capabilities, e.g. ("spectrum_analyzer",)
-
-
-class DeviceIdentity(ContractModel):
-    vendor: str
-    model: str
-    serial: str = ""
-    firmware: str = ""
-    raw: str = ""                    # full *IDN? / SDK identity string
-
-
-class DeviceHealth(ContractModel):
-    status: Literal["ok", "degraded", "error", "offline"]
-    detail: str | None = None
-    metrics: dict[str, float] = Field(default_factory=dict)
-
-
-SnapshotValue = str | float | int | bool | None
-
-
-class InstrumentSnapshot(ContractModel):
-    """Settings snapshot for pre/post-run baselines (refactor.md §10.5)."""
-
-    instrument_id: InstrumentId
-    taken_at: AwareDatetime = Field(default_factory=utc_now)
-    values: dict[str, SnapshotValue] = Field(default_factory=dict)
+#: Operational error ring size — capped so an always-on deployment's stats
+#: never grow without bound (plan §3.1 A2).
+_ERROR_RING_SIZE = 32
 
 
 class InstrumentController(ABC):
@@ -63,6 +54,41 @@ class InstrumentController(ABC):
             owner=str(instrument_id), validate_responses=validate_responses
         )
         self._op_lock = asyncio.Lock()
+        self._started_at = utc_now()
+        self._ops_ok = 0
+        self._ops_failed = 0
+        self._error_ring: deque[str] = deque(maxlen=_ERROR_RING_SIZE)
+
+    # ---- operational state (plan §3.1 A2) -----------------------------------
+    @property
+    def busy(self) -> bool:
+        """True while an operation holds the op-lock (lock-free read)."""
+        return self._op_lock.locked()
+
+    def note_ok(self) -> None:
+        self._ops_ok += 1
+
+    def note_error(self, exc: BaseException | str) -> None:
+        self._ops_failed += 1
+        text = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
+        self._error_ring.append(f"{utc_now().isoformat()} {text}")
+
+    def get_stats(self) -> ControllerStats:
+        return ControllerStats(
+            instrument_id=self.instrument_id, started_at=self._started_at,
+            ops_ok=self._ops_ok, ops_failed=self._ops_failed,
+            recent_errors=tuple(self._error_ring),
+        )
+
+    async def probe_health(self) -> DeviceHealth:
+        """``get_health()`` under the op-lock (plan §3.1 A10): probes never
+        interleave SCPI into a running acquisition.  A device whose lock is
+        held is being actively used — that IS the health signal, so the probe
+        is skipped instead of queueing behind the operation."""
+        if self._op_lock.locked():
+            return DeviceHealth(status="ok", detail="busy (operation in progress)")
+        async with self._op_lock:
+            return await self.get_health()
 
     # ---- lifecycle & observability -----------------------------------------
     @property

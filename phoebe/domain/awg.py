@@ -7,7 +7,8 @@ dataclasses that hold ndarrays and are validated by guard functions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, Mapping
+from typing import Annotated, Literal
+from collections.abc import Mapping
 
 import numpy as np
 from pydantic import Field
@@ -85,7 +86,7 @@ class WaveformDefinition:
     def length(self) -> int:
         return int(self.samples.size)
 
-    def ensure_granularity(self, granularity: int = WAVEFORM_GRANULARITY) -> "WaveformDefinition":
+    def ensure_granularity(self, granularity: int = WAVEFORM_GRANULARITY) -> WaveformDefinition:
         if self.length % granularity == 0:
             return self
         pad = granularity - (self.length % granularity)
