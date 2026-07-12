@@ -73,6 +73,101 @@
       "title": "AdmissionDecision",
       "type": "object"
     },
+    "ApiEnvelope": {
+      "additionalProperties": false,
+      "description": "Every ``/api/v1`` response body.  Clients branch on ``status`` for\ncoarse UI (toast/banner) and on the typed payload inside ``data`` for\nlogic — the envelope itself carries zero domain semantics.",
+      "properties": {
+        "data": {
+          "default": null,
+          "title": "Data"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "warning",
+            "error"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "warning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warning"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "ApiEnvelope",
+      "type": "object"
+    },
+    "ApiError": {
+      "additionalProperties": false,
+      "description": "One transport-level failure: HTTP status mirror + stable code +\nhuman detail (never parsed).  ``info`` attributes device/kernel errors\nwhen one caused the failure.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ApiErrorCode"
+        },
+        "info": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "code",
+        "message"
+      ],
+      "title": "ApiError",
+      "type": "object"
+    },
+    "ApiErrorCode": {
+      "description": "Transport-level failure vocabulary.  Values are part of the serialized\ncontract — never rename them.",
+      "enum": [
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "validation",
+        "unavailable",
+        "internal"
+      ],
+      "title": "ApiErrorCode",
+      "type": "string"
+    },
     "CommandAck": {
       "additionalProperties": false,
       "properties": {
@@ -1414,6 +1509,62 @@
       "title": "ScalarSeries",
       "type": "object"
     },
+    "ServerMeta": {
+      "additionalProperties": false,
+      "description": "``GET /api/v1/meta`` — capability discovery + version pinning (A14).\n\n``static_ui`` reports the dist cascade: ``ok`` (pinned versions match),\n``outdated`` (older dist served with a warning), ``refused`` (newer than\nthe backend or unreadable pin — not served), ``absent``.",
+      "properties": {
+        "api_version": {
+          "title": "Api Version",
+          "type": "integer"
+        },
+        "app_version": {
+          "title": "App Version",
+          "type": "string"
+        },
+        "contracts_version": {
+          "title": "Contracts Version",
+          "type": "integer"
+        },
+        "current_seq": {
+          "title": "Current Seq",
+          "type": "integer"
+        },
+        "name": {
+          "const": "phoebe",
+          "default": "phoebe",
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "read_only",
+            "operator"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "static_ui": {
+          "enum": [
+            "ok",
+            "outdated",
+            "refused",
+            "absent"
+          ],
+          "title": "Static Ui",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app_version",
+        "api_version",
+        "contracts_version",
+        "role",
+        "current_seq",
+        "static_ui"
+      ],
+      "title": "ServerMeta",
+      "type": "object"
+    },
     "SpectrumPreview": {
       "additionalProperties": false,
       "description": "Down-sampled preview small enough for the bus; cap is part of the schema.",
@@ -1493,6 +1644,12 @@
   "roots": {
     "AdmissionDecision": {
       "$ref": "#/$defs/AdmissionDecision"
+    },
+    "ApiEnvelope": {
+      "$ref": "#/$defs/ApiEnvelope"
+    },
+    "ApiError": {
+      "$ref": "#/$defs/ApiError"
     },
     "CommandAck": {
       "$ref": "#/$defs/CommandAck"
@@ -1596,6 +1753,9 @@
     },
     "RunResult": {
       "$ref": "#/$defs/RunResult"
+    },
+    "ServerMeta": {
+      "$ref": "#/$defs/ServerMeta"
     }
   }
 }

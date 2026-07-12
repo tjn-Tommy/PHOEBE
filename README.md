@@ -15,7 +15,8 @@
 pip install -e .[dev,ui]       # 核心: pydantic numpy h5py loguru; UI: PyQt5 pyqtgraph
 python examples/run_sim_demo.py            # 无 UI 的命令行演示
 python -m phoebe.ui.app --config config/sim.toml   # PyQt5 图形界面
-python -m pytest tests/ -q     # 35 项测试，含 L4 全链路仿真闭环
+python -m phoebe.server --config config/sim.toml   # HTTP API + Web UI（需 pip install -e .[server]）
+python -m pytest tests/ -q     # 151 项测试，含 L4 全链路仿真闭环
 ```
 
 `config/sim.toml` 中每台仪器 `backend = "sim"`；改为 `"real"` 并填好连接参数即切换真机（OSA/Scope/AWG 需 `pip install .[visa]`，DAQ 需 `.[daq]`）。
@@ -47,6 +48,9 @@ python -m pytest tests/ -q     # 35 项测试，含 L4 全链路仿真闭环
 | `phoebe/ui/bridge.py` | Qt 事件桥（PyQt5，跨线程 Signal） | §12.5 |
 | `phoebe/ui/main_window.py` | 设备面板 / 运行控制 / pyqtgraph 实时绘图 / 事件日志 | §13.2 |
 | `phoebe/ui/app.py` | UI 入口：Qt 主线程 + phoebe loop 线程 | §12.1 |
+| `phoebe/contracts/` | 全部可序列化契约（AckCode/事件/日志记录）+ JSON Schema 导出 | 演进计划 C-1/C-5 |
+| `phoebe/services/` | 应用服务层（PyQt 与 HTTP 适配器共用同一表面） | 演进计划 C-4 |
+| `phoebe/server/` | FastAPI 适配器：`/api/v1` + SSE 事件流 + 静态 Web UI + 安全阶梯 | 演进计划 Phase E |
 
 ## 迁移映射
 

@@ -19,11 +19,15 @@ visa = ["pyvisa", "pyvisa-py"]
 daq = ["nidaqmx"]
 parquet = ["pyarrow>=14"]
 ui = ["PyQt5", "pyqtgraph"]
+server = ["fastapi>=0.111", "uvicorn>=0.30"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6", "import-linter>=2",
-       "pyright>=1.1"]
+       "pyright>=1.1", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 include = ["phoebe*"]
+
+[tool.setuptools.package-data]
+"phoebe.server" = ["static/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -51,6 +55,8 @@ ignore = [
 # test helpers take timeout params; broad pytest.raises is deliberate;
 # polling loops (ASYNC110) are how tests observe states they don't control
 "tests/*" = ["ASYNC109", "ASYNC110", "B017"]
+# importorskip("fastapi") must run before the phoebe.server imports
+"tests/test_server_api.py" = ["E402", "ASYNC109", "ASYNC110", "B017"]
 
 [tool.importlinter]
 root_package = "phoebe"
@@ -66,7 +72,7 @@ forbidden_modules = ["awg5204", "TPA_experiment"]
 name = "Layered architecture (refactor.md §18-13; plan §6.1)"
 type = "layers"
 layers = [
-    "phoebe.ui",
+    "phoebe.ui | phoebe.server",
     "phoebe.app",
     "phoebe.services",
     "phoebe.plugins",
@@ -97,6 +103,28 @@ forbidden_modules = [
 name = "UI stays on the services surface (no direct core internals) (plan C-4)"
 type = "forbidden"
 source_modules = ["phoebe.ui"]
+forbidden_modules = [
+    "phoebe.instruments",
+    "phoebe.transports",
+    "phoebe.domain",
+    "phoebe.core.admission",
+    "phoebe.core.bus",
+    "phoebe.core.capability",
+    "phoebe.core.catalog",
+    "phoebe.core.command_ledger",
+    "phoebe.core.controller",
+    "phoebe.core.device_manager",
+    "phoebe.core.gateway",
+    "phoebe.core.journal",
+    "phoebe.core.task_manager",
+    "phoebe.core.worker",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Server stays on the services surface — no controller/raw-SCPI reach (plan E-1/E-4)"
+type = "forbidden"
+source_modules = ["phoebe.server"]
 forbidden_modules = [
     "phoebe.instruments",
     "phoebe.transports",

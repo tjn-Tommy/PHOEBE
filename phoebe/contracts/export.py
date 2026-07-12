@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, TypeAdapter
 from pydantic.json_schema import models_json_schema
 
+from .api import ApiEnvelope, ApiError, ServerMeta
 from .commands import AdmissionDecision, CommandAck, CommandEnvelope
 from .errors import ErrorInfo
 from .events import EventBusStats, GatewayEvent, PreviewPayload
@@ -70,6 +71,9 @@ _MODELS: tuple[type[BaseModel], ...] = (
     InstrumentDescriptor,
     InstrumentSnapshot,
     DeviceStatusView,
+    ApiEnvelope,
+    ApiError,
+    ServerMeta,
 )
 
 _UNIONS: dict[str, Any] = {

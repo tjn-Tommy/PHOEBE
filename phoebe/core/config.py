@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError
 
+from ..contracts.api import ServerRole
 from .contracts import ContractModel, InstrumentId, Seconds, validate_boundary
 from .errors import PhoebeConfigError
 
@@ -93,6 +94,21 @@ class ReconnectSettings(ContractModel):
     probe_timeout_s: Seconds = 10.0
 
 
+class ServerConfig(ContractModel):
+    """``[server]`` — the HTTP adapter (plan Phase E).  Fail-closed exposure
+    ladder (lessons §8.2): a non-loopback ``host`` requires an *explicit*
+    ``token`` and ``role = "read_only"`` — ``phoebe.server.auth`` refuses to
+    start otherwise.  An empty token means one is generated per process
+    start (localhost convenience)."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: Annotated[int, Field(ge=1, le=65_535)] = 8760
+    token: str = ""                      # "" → per-process generated token
+    role: ServerRole = "operator"
+    sse_keepalive_s: Seconds = 15.0      # SSE comment ping interval
+
+
 class AppConfig(ContractModel):
     instruments: tuple[InstrumentConfig, ...]
     plugin_bindings: dict[str, dict[str, str]] = Field(default_factory=dict)
@@ -105,6 +121,7 @@ class AppConfig(ContractModel):
     cleanup_timeout_s: Seconds = 30.0
     reconnect: ReconnectSettings = ReconnectSettings()
     health_poll_interval_s: Annotated[float, Field(ge=0)] = 30.0   # 0 disables the poller
+    server: ServerConfig = ServerConfig()
 
     def instrument(self, instrument_id: str) -> InstrumentConfig:
         for cfg in self.instruments:

@@ -20,8 +20,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install (core + dev + parquet; no VISA / DAQ / Qt needed)
-        run: python -m pip install -e .[dev,parquet]
+      - name: Install (core + dev + parquet + server; no VISA / DAQ / Qt needed)
+        run: python -m pip install -e .[dev,parquet,server]
 
       - name: Lint (ruff)
         run: ruff check phoebe tests examples tools

@@ -8,6 +8,14 @@ dispatch_policy = "reject"
 [storage]
 runs_root = "runs"
 
+# HTTP adapter (python -m phoebe.server --config config/sim.toml).
+# Localhost-only by default; a session token is generated per process start.
+# Binding beyond loopback requires an explicit token AND role = "read_only".
+[server]
+host = "127.0.0.1"
+port = 8760
+role = "operator"
+
 [[instruments]]
 instrument_id = "slm.primary"
 kind = "pattern_modulator"

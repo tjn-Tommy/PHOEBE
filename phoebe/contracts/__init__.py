@@ -11,6 +11,7 @@ frontend codegen and the CI drift check.
 """
 from __future__ import annotations
 
+from .api import ApiEnvelope, ApiError, ApiErrorCode, ServerMeta
 from .base import (
     AwareDatetime,
     CapabilityId,
@@ -32,6 +33,9 @@ __all__ = [
     "AckCode",
     "AdmissionCode",
     "AdmissionDecision",
+    "ApiEnvelope",
+    "ApiError",
+    "ApiErrorCode",
     "AwareDatetime",
     "CapabilityId",
     "CommandAck",
@@ -48,6 +52,7 @@ __all__ = [
     "RunJournalRecord",
     "RunResult",
     "RunState",
+    "ServerMeta",
     "TaskId",
     "error_code_of",
     "error_info_of",

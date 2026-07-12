@@ -13,6 +13,25 @@ export interface AdmissionDecision {
   task_id?: string | null;
 }
 
+/** Every ``/api/v1`` response body.  Clients branch on ``status`` for */
+export interface ApiEnvelope {
+  data?: unknown;
+  error?: ApiError | null;
+  status: "ok" | "warning" | "error";
+  warning?: string | null;
+}
+
+/** One transport-level failure: HTTP status mirror + stable code + */
+export interface ApiError {
+  code: ApiErrorCode;
+  info?: ErrorInfo | null;
+  message: string;
+  status: number;
+}
+
+/** Transport-level failure vocabulary.  Values are part of the serialized */
+export type ApiErrorCode = "unauthorized" | "forbidden" | "not_found" | "validation" | "unavailable" | "internal";
+
 export interface CommandAck {
   accepted: boolean;
   code: AckCode;
@@ -252,6 +271,17 @@ export interface ScalarSeries {
   preview_type?: "scalar_series";
   x: number[];
   y: number[];
+}
+
+/** ``GET /api/v1/meta`` — capability discovery + version pinning (A14). */
+export interface ServerMeta {
+  api_version: number;
+  app_version: string;
+  contracts_version: number;
+  current_seq: number;
+  name?: "phoebe";
+  role: "read_only" | "operator";
+  static_ui: "ok" | "outdated" | "refused" | "absent";
 }
 
 /** Down-sampled preview small enough for the bus; cap is part of the schema. */

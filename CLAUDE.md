@@ -16,6 +16,7 @@ python -m pytest tests/test_e2e_sim.py -q           # one file
 python -m pytest tests/ -k "pause" -q               # by keyword
 python examples/run_sim_demo.py                     # headless end-to-end demo
 python -m phoebe.ui.app --config config/sim.toml    # PyQt5 GUI (sim mode, no hardware)
+python -m phoebe.server --config config/sim.toml    # HTTP API + web UI (needs .[server])
 ruff check phoebe tests examples tools              # lint gate (CI-enforced)
 lint-imports                                        # architecture layer contracts (CI-enforced)
 pyright                                             # type gate, contracts/core/domain/services scope (CI-enforced)
@@ -24,7 +25,7 @@ python tools/gen_ts_types.py                        # regenerate the TS sample c
 ```
 
 - pytest runs with `asyncio_mode = "auto"` — async test functions need no decorator.
-- Everything works with only the core deps (pydantic/numpy/h5py/loguru): `pyvisa`, `nidaqmx`, and `PyQt5` are imported lazily so sim mode and tests never require them. Keep it that way — never import them at module top level outside `phoebe/transports/visa.py`, `phoebe/instruments/ni_daq/`, and `phoebe/ui/`.
+- Everything works with only the core deps (pydantic/numpy/h5py/loguru): `pyvisa`, `nidaqmx`, `PyQt5`, and `fastapi`/`uvicorn` are imported lazily so sim mode and tests never require them. Keep it that way — never import them at module top level outside `phoebe/transports/visa.py`, `phoebe/instruments/ni_daq/`, `phoebe/ui/`, and `phoebe/server/` (`tests/test_server_api.py` importorskips fastapi).
 - Real hardware: set `backend = "real"` per instrument in the TOML config; extras `.[visa]` (OSA/Scope/AWG) and `.[daq]` (NI-DAQ).
 - The UI is **PyQt5** by explicit user choice — do not migrate to PySide6/PyQt6.
 
@@ -41,6 +42,8 @@ python tools/gen_ts_types.py                        # regenerate the TS sample c
 **Plugins** (`phoebe/plugins/`, pattern: `tpa_multiplier.py`): `@register(plugin_id=...)` class + `@on_command("...")` async method taking `(config, ctx, instrument=Depends(role="..."))`. Roles resolve via `[plugins."<id>".bindings]` in the TOML config (`core/di.py`). Hard rules (refactor.md §18): plugin code contains **zero locks, zero Driver imports, zero manual sleeps** — settling lives in controller options (e.g. `SlmOptions.settle_ms`), waiting lives in `ctx.checkpoint`/controller internals.
 
 **Threading.** Three tiers: Qt main thread (UI only) / one dedicated asyncio `LoopThread` (all of phoebe core, `app/bootstrap.py`) / per-device `BlockingDeviceWorker` threads (`core/worker.py`) for blocking SDK calls — the Santec SLM worker uses `pump=True` + a load-DLL initializer so the vendor DLL and its Win32 message pump never leave that thread. The UI talks only to `phoebe/services/` (`ServiceHub.call(coro)` = `run_coroutine_threadsafe` in; `UiEventBridge`'s `pyqtSignal` out, `ui/bridge.py`) — import-linter forbids UI→core-internal imports. Never show modal dialogs on command-ack paths (`ui/main_window.py` uses statusbar + log instead — modals break offscreen/automated runs).
+
+**HTTP adapter** (`phoebe/server/`, Phase E): FastAPI over the same `phoebe/services/` surface the UI uses — an import-linter contract forbids server→core-internal imports too. Everything under `/api/v1` returns the `ApiEnvelope` (`status: ok|warning|error`); domain rejections are `CommandAck`s inside `data` (branch on `data.code`), `ApiError` is transport-level only. SSE lives at `/api/v1/events/stream` with `Last-Event-ID`/`since_seq` gap repair from the bus replay ring. The zero-build web client in `phoebe/server/static/` is gated by the A14 version-pin cascade — its `version` file must equal `CONTRACTS_VERSION` or the server refuses/flags it (bump it when contracts change). Security ladder is fail-closed in `server/auth.py`: loopback binds get a per-process token (printed, never logged); non-loopback requires explicit token + `role = "read_only"`. Mutating routes audit to `runs/.phoebe/audit.jsonl`. Threat model: `docs/architecture-review/SERVER_THREAT_MODEL.md`.
 
 **Simulation.** `instruments/sim/` implements all five controllers over a shared `SimContext` whose physics couples the SLM mask to the OSA spectrum (mask coherence → peak height), so optimizer loops close offline with meaningful feedback. Test doubles for lower layers live in `transports/mock.py` (`MockScpiTransport` with fnmatch rules, `TranscriptReplayTransport` for replaying recorded real-device sessions — no transcripts recorded yet).
 

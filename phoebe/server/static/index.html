@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PHOEBE</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="token-gate" class="overlay hidden">
+    <div class="gate-card">
+      <h2>PHOEBE</h2>
+      <p>Paste the session token printed by <code>python -m phoebe.server</code>:</p>
+      <input id="token-input" type="password" autocomplete="off" placeholder="session token">
+      <button id="token-connect">Connect</button>
+      <p id="token-error" class="error-text"></p>
+    </div>
+  </div>
+
+  <header>
+    <span class="brand">PHOEBE</span>
+    <span id="meta-info" class="meta"></span>
+    <span id="conn-dot" class="dot off" title="event stream"></span>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+
+  <main>
+    <section class="col">
+      <div class="panel">
+        <h3>Devices</h3>
+        <table id="devices"><thead><tr>
+          <th>instrument</th><th>kind</th><th>backend</th><th>lifecycle</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="panel">
+        <h3>Submit</h3>
+        <select id="command-select"></select>
+        <form id="command-form"></form>
+        <button id="submit-btn">Submit</button>
+        <div id="ack-line" class="mono"></div>
+      </div>
+    </section>
+
+    <section class="col">
+      <div class="panel">
+        <h3>Active run</h3>
+        <div id="run-line" class="mono">no run</div>
+        <div id="progress-line" class="mono"></div>
+        <div class="controls">
+          <button id="pause-btn" disabled>Pause</button>
+          <button id="resume-btn" disabled>Resume</button>
+          <button id="cancel-btn" disabled>Cancel</button>
+        </div>
+      </div>
+      <div class="panel grow">
+        <h3 id="preview-title">Live preview</h3>
+        <canvas id="preview" width="560" height="300"></canvas>
+      </div>
+    </section>
+
+    <section class="col">
+      <div class="panel">
+        <h3>Runs <button id="runs-refresh" class="small">Refresh</button></h3>
+        <table id="runs"><thead><tr>
+          <th>run</th><th>command</th><th>state</th><th>finalized</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="panel grow">
+        <h3>Log</h3>
+        <div id="log" class="log mono"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
