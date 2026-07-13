@@ -1,0 +1,10 @@
+# Static manifest — same folder format as third-party plugin_dirs entries.
+# Facts only (id / version / API range / commands); the commands list is
+# consistency-checked against the @on_command entrypoints at load time.
+plugin_id = "org.lab.tpa_multiplier"
+name = "TPA Multiplier"
+version = "1.0.0"
+api = ">=1,<2"
+entry = "plugin.py"
+commands = ["start_tpa_run"]
+description = "Random-mask encoding search against the OSA peak (refactor.md §11.1)."

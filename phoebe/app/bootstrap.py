@@ -26,7 +26,7 @@ from ..core.factory import AppDependencies, ControllerFactoryRegistry
 from ..core.gateway import Gateway
 from ..core.journal import scan_and_recover
 from ..core.log_bridge import attach_log_bridge
-from ..core.plugin import PluginRegistry, plugin_registry
+from ..core.plugin import PluginRegistry, load_plugin_directory, plugin_registry
 from ..core.task_manager import TaskManager
 from ..core.worker import WorkerPool
 from ..instruments.registry import register_builtin_factories
@@ -107,6 +107,12 @@ async def build_runtime(
         device_manager.start_health_poller(interval_s=config.health_poll_interval_s)
 
     registry = plugins or plugin_registry
+    for plugin_dir in config.plugin_dirs:      # discovery degrades, never aborts
+        load_plugin_directory(plugin_dir, registry)
+    for failure in registry.failures():
+        logger.warning("plugin {} unavailable ({}): {}", failure.plugin_id,
+                       failure.source,
+                       failure.error.message if failure.error else "?")
     task_manager = TaskManager(
         app_config=config, device_manager=device_manager, bus=bus,
         registry=registry, runs_root=runs_root,

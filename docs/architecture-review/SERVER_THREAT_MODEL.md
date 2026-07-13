@@ -64,3 +64,20 @@ shell uses in-process. It holds no privileged path of its own:
 Raw SCPI passthrough · arbitrary code execution · endpoints that bypass the
 Gateway or leases · auto-resume of real runs over the API · token in URLs ·
 non-localhost binds without climbing rung 2 first (TLS, identity, review).
+
+## Addendum (desktop client): CORS allowlist
+
+The Tauri desktop client (`desktop/`) and its vite dev server run on
+different browser origins than the API (`tauri://localhost`,
+`http(s)://tauri.localhost`, `http://localhost:1420`), so
+`phoebe.server.app.DESKTOP_ORIGINS` grants exactly those origins CORS access
+(`test_cors_allowlist_for_desktop_origins`). This does **not** move the
+server up the ladder:
+
+- Authentication stays header-token based; there are no cookies and
+  `allow_credentials` stays off, so a hostile page gaining a CORS grant would
+  still hold no credential — and hostile pages get no grant: the allowlist is
+  fixed at build time, never `*`, and never configurable upward from TOML.
+- The SSE stream and every mutating route still require the same token; the
+  browser preflight (`OPTIONS`) is unauthenticated by HTTP design but
+  performs no work and reveals only the allowlist itself.

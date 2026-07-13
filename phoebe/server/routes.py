@@ -211,6 +211,25 @@ def build_router(
         return ok()
 
     # ------------------------------------------------------------- plugins
+    @api.get("/plugins")
+    async def plugin_status() -> dict:
+        rows = await call(services.plugins.status())
+        return ok([r.model_dump(mode="json") for r in rows])
+
+    @api.post("/plugins/{plugin_id}/enable", dependencies=write)
+    async def plugin_enable(plugin_id: str, request: Request) -> dict:
+        await call(services.plugins.enable(plugin_id))
+        audit.record(actor=_actor(request), action="plugin_enable",
+                     target=plugin_id, outcome="ok")
+        return ok()
+
+    @api.post("/plugins/{plugin_id}/disable", dependencies=write)
+    async def plugin_disable(plugin_id: str, request: Request) -> dict:
+        await call(services.plugins.disable(plugin_id))
+        audit.record(actor=_actor(request), action="plugin_disable",
+                     target=plugin_id, outcome="ok")
+        return ok()
+
     @api.get("/plugins/commands")
     async def plugin_commands() -> dict:
         return ok(list(await call(services.plugins.commands())))

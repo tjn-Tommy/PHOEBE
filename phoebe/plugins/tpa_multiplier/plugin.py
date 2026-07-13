@@ -17,14 +17,18 @@ from typing import Annotated
 import numpy as np
 from pydantic import Field
 
-from ..core.contracts import ContractModel
-from ..core.di import Depends
-from ..core.plugin import Plugin, on_command, register
-from ..core.task_manager import RunContext
-from ..core.writer import MaskRecipe
-from ..domain.pattern import make_uniform_random
-from ..domain.spectrum import SpectrumScanConfig, TraceRequest
-from ..instruments.protocols import PatternModulator, SpectrumAnalyzer
+from ...api import (
+    ContractModel,
+    Depends,
+    MaskRecipe,
+    PatternModulator,
+    Plugin,
+    RunContext,
+    SpectrumAnalyzer,
+    on_command,
+)
+from ...domain.pattern import make_uniform_random
+from ...domain.spectrum import SpectrumScanConfig, TraceRequest
 
 
 class TPAConfig(ContractModel):
@@ -36,8 +40,8 @@ class TPAConfig(ContractModel):
     mask_spot_check_every: Annotated[int, Field(ge=1)] = 100
 
 
-@register(plugin_id="org.lab.tpa_multiplier")
 class TPAMultiplierPlugin(Plugin):
+    plugin_id = "org.lab.tpa_multiplier"
     config_type = TPAConfig
 
     @on_command("start_tpa_run")

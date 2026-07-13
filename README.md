@@ -16,7 +16,16 @@ pip install -e .[dev,ui]       # 核心: pydantic numpy h5py loguru; UI: PyQt5 p
 python examples/run_sim_demo.py            # 无 UI 的命令行演示
 python -m phoebe.ui.app --config config/sim.toml   # PyQt5 图形界面
 python -m phoebe.server --config config/sim.toml   # HTTP API + Web UI（需 pip install -e .[server]）
-python -m pytest tests/ -q     # 151 项测试，含 L4 全链路仿真闭环
+python -m pytest tests/ -q     # 187 项测试，含 L4 全链路仿真闭环
+```
+
+桌面客户端（Vue 3 + Tauri 2，位于 `desktop/`，需 pnpm + Rust 工具链）：
+
+```powershell
+cd desktop
+pnpm install
+pnpm tauri dev                 # 开发模式（先启动上面的 phoebe.server，再在连接页粘贴 token）
+pnpm tauri build               # 产出 exe + msi/nsis 安装包（src-tauri/target/release/bundle/）
 ```
 
 `config/sim.toml` 中每台仪器 `backend = "sim"`；改为 `"real"` 并填好连接参数即切换真机（OSA/Scope/AWG 需 `pip install .[visa]`，DAQ 需 `.[daq]`）。
@@ -48,9 +57,12 @@ python -m pytest tests/ -q     # 151 项测试，含 L4 全链路仿真闭环
 | `phoebe/ui/bridge.py` | Qt 事件桥（PyQt5，跨线程 Signal） | §12.5 |
 | `phoebe/ui/main_window.py` | 设备面板 / 运行控制 / pyqtgraph 实时绘图 / 事件日志 | §13.2 |
 | `phoebe/ui/app.py` | UI 入口：Qt 主线程 + phoebe loop 线程 | §12.1 |
+| `phoebe/api/` | 插件作者唯一许可的导入面（B5 门面） | 演进计划 D-1 |
 | `phoebe/contracts/` | 全部可序列化契约（AckCode/事件/日志记录）+ JSON Schema 导出 | 演进计划 C-1/C-5 |
+| `phoebe/core/bundle.py` | Profile Bundle 安全 preflight/导入 + RunDraft | 演进计划 D-4 |
 | `phoebe/services/` | 应用服务层（PyQt 与 HTTP 适配器共用同一表面） | 演进计划 C-4 |
 | `phoebe/server/` | FastAPI 适配器：`/api/v1` + SSE 事件流 + 静态 Web UI + 安全阶梯 | 演进计划 Phase E |
+| `desktop/` | Tauri 2 + Vue 3 桌面客户端（仪表盘/设备/运行控制/运行目录/插件/日志），走同一 `/api/v1` | 演进计划 E-3 后续 |
 
 ## 迁移映射
 
@@ -72,19 +84,32 @@ python -m pytest tests/ -q     # 151 项测试，含 L4 全链路仿真闭环
 
 ## 写一个新实验插件
 
-```python
-from phoebe.core.di import Depends
-from phoebe.core.plugin import Plugin, on_command, register
-from phoebe.instruments.protocols import PatternModulator, SpectrumAnalyzer
+每个插件是一个文件夹（内置插件与第三方插件格式完全一致）：`plugin.toml` 静态清单 + `plugin.py` 代码。放进配置里 `plugin_dirs` 指向的目录即被发现；坏插件只降级为失败记录，绝不阻断启动。
 
-@register(plugin_id="org.lab.my_experiment")
-class MyExperiment(Plugin):
-    config_type = MyConfig                      # ContractModel 子类
+```toml
+# my_experiment/plugin.toml —— 静态事实，commands 与代码一致性在加载时校验
+plugin_id = "org.lab.my_experiment"
+version = "1.0.0"
+api = ">=1,<2"                 # PEP 440 范围，对内核 PLUGIN_API_VERSION 检查
+entry = "plugin.py"
+commands = ["start_my_experiment"]
+```
+
+```python
+# my_experiment/plugin.py —— 只 import phoebe.api（外加 phoebe.domain/numpy/pydantic）
+from phoebe.api import (ContractModel, Depends, PatternModulator, Plugin,
+                        RunContext, SpectrumAnalyzer, on_command)
+
+class MyConfig(ContractModel):
+    max_steps: int = 100
+
+class MyExperiment(Plugin):                     # 无注册副作用，由加载器注册
+    config_type = MyConfig
 
     @on_command("start_my_experiment")
-    async def run(self, config: MyConfig, ctx,
+    async def run(self, config: MyConfig, ctx: RunContext,
                   slm: PatternModulator = Depends(role="primary_slm"),
-                  osa: SpectrumAnalyzer = Depends(role="main_osa")):
+                  osa: SpectrumAnalyzer = Depends(role="main_osa")) -> None:
         for step in range(config.max_steps):
             await ctx.checkpoint("step", step=step)          # pause/cancel/心跳
             await slm.display_pattern(frame, context=ctx)    # 返回即 settled
@@ -95,4 +120,4 @@ class MyExperiment(Plugin):
                               pointer=ptr, preview=trace.preview())
 ```
 
-插件内**零锁代码、零 Driver import、零手写 sleep** —— 违反即打回（§18 硬性规则）。
+插件内**零锁代码、零 Driver import、零手写 sleep** —— 违反即打回（§18 硬性规则，`core/conformance.py` 静态检查强制执行）。UI 表单（PyQt / Web / 桌面端）全部由 `config_type.model_json_schema()` 生成，默认值只有一个来源（H12）。

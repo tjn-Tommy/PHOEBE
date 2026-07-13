@@ -27,6 +27,7 @@ from .base import (
 from .commands import AckCode, AdmissionCode, AdmissionDecision, CommandAck, CommandEnvelope
 from .errors import ErrorCode, ErrorInfo, error_code_of, error_info_of
 from .events import GatewayEvent, PreviewPayload
+from .plugin import PluginManifest, PluginStatusView, manifest_hash
 from .run import JournalRecordType, RunJournalRecord, RunResult, RunState
 
 __all__ = [
@@ -47,6 +48,8 @@ __all__ = [
     "InstrumentId",
     "JournalRecordType",
     "LeaseId",
+    "PluginManifest",
+    "PluginStatusView",
     "PreviewPayload",
     "RunId",
     "RunJournalRecord",
@@ -56,6 +59,7 @@ __all__ = [
     "TaskId",
     "error_code_of",
     "error_info_of",
+    "manifest_hash",
     "timestamps",
     "utc_now",
     "validate_boundary",

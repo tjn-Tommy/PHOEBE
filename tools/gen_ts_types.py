@@ -21,7 +21,12 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BUNDLE = REPO_ROOT / "schemas" / "phoebe-contracts.schema.json"
-DEFAULT_OUT = REPO_ROOT / "examples" / "ts_consumer" / "phoebe-contracts.d.ts"
+#: Every consumer of the generated types — the sample consumer and the
+#: Tauri desktop client — is regenerated (and drift-checked) together.
+DEFAULT_OUTS = (
+    REPO_ROOT / "examples" / "ts_consumer" / "phoebe-contracts.d.ts",
+    REPO_ROOT / "desktop" / "src" / "api" / "contracts.d.ts",
+)
 
 _PRIMITIVES = {
     "string": "string",
@@ -116,29 +121,33 @@ def render(bundle: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, default=DEFAULT_BUNDLE)
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--out", type=Path, action="append", default=None,
+                        help="output path(s); default: all known consumers")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
+    outs: tuple[Path, ...] = tuple(args.out) if args.out else DEFAULT_OUTS
 
     bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
     rendered = render(bundle)
 
     if args.check:
-        try:
-            current = args.out.read_text(encoding="utf-8")
-        except OSError:
-            current = ""
-        if current != rendered:
-            print(f"TS TYPES DRIFT: {args.out} does not match the schema "
-                  f"bundle — run `python tools/gen_ts_types.py` and commit",
-                  file=sys.stderr)
-            return 2
-        print(f"{args.out} is up to date")
+        for out in outs:
+            try:
+                current = out.read_text(encoding="utf-8")
+            except OSError:
+                current = ""
+            if current != rendered:
+                print(f"TS TYPES DRIFT: {out} does not match the schema "
+                      f"bundle — run `python tools/gen_ts_types.py` and "
+                      "commit", file=sys.stderr)
+                return 2
+            print(f"{out} is up to date")
         return 0
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(rendered, encoding="utf-8", newline="\n")
-    print(f"wrote {args.out}")
+    for out in outs:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8", newline="\n")
+        print(f"wrote {out}")
     return 0
 
 

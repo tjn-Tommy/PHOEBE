@@ -35,6 +35,14 @@ from .instruments import (
     InstrumentDescriptor,
     InstrumentSnapshot,
 )
+from .plugin import PluginManifest, PluginStatusView
+from .profile import (
+    BundleManifest,
+    BundlePreflight,
+    CalibrationAsset,
+    ExperimentProfile,
+    RunDraft,
+)
 from .run import (
     DataPointer,
     RecoveryReport,
@@ -74,6 +82,13 @@ _MODELS: tuple[type[BaseModel], ...] = (
     ApiEnvelope,
     ApiError,
     ServerMeta,
+    PluginManifest,
+    PluginStatusView,
+    BundleManifest,
+    CalibrationAsset,
+    ExperimentProfile,
+    BundlePreflight,
+    RunDraft,
 )
 
 _UNIONS: dict[str, Any] = {

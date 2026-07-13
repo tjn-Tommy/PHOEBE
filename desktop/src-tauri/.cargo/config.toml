@@ -1,0 +1,6 @@
+# Cargo falls back to git's global http.proxy, which on this machine points
+# at a local proxy that is not always running; crates.io is directly
+# reachable, so force a direct connection for this crate only.
+# (An explicitly empty proxy tells libcurl to bypass any proxy.)
+[http]
+proxy = ""

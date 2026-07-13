@@ -302,6 +302,31 @@ async def test_device_actions_over_http(api):
     assert set(stats) == {"slm.primary", "osa.main"}
 
 
+async def test_plugin_platform_over_http(api):
+    """D-1 surface: availability report + enable/disable with typed acks."""
+    client, _ = api
+    rows = (await client.get("/api/v1/plugins")).json()["data"]
+    states = {r["plugin_id"]: r["state"] for r in rows}
+    assert states.get("org.lab.tpa_multiplier") == "loaded"
+
+    try:
+        r = await client.post("/api/v1/plugins/org.lab.tpa_multiplier/disable")
+        assert r.json()["status"] == "ok"
+        submit = (await client.post(
+            "/api/v1/commands",
+            json=_envelope_dict("start_tpa_run", _tpa_payload(2)))).json()
+        assert submit["status"] == "warning"
+        assert submit["data"]["code"] == "plugin_disabled"
+        rows = (await client.get("/api/v1/plugins")).json()["data"]
+        states = {r["plugin_id"]: r["state"] for r in rows}
+        assert states["org.lab.tpa_multiplier"] == "disabled"
+        assert (await client.post(
+            "/api/v1/plugins/org.nope/enable")).status_code == 404
+    finally:
+        r = await client.post("/api/v1/plugins/org.lab.tpa_multiplier/enable")
+        assert r.json()["status"] == "ok"
+
+
 async def test_plugin_schema_over_http(api):
     client, _ = api
     commands = (await client.get("/api/v1/plugins/commands")).json()["data"]
@@ -449,3 +474,29 @@ async def test_static_version_cascade(runtime, tmp_path):
     async with _client(app) as client:
         r = await client.get("/")
         assert r.json()["static_ui"] == "absent"
+
+
+# ------------------------------------------------------------------ E-3 CORS
+async def test_cors_allowlist_for_desktop_origins(api):
+    """The Tauri desktop client and the vite dev server are separate origins;
+    they get a CORS grant.  Foreign origins get none (auth stays header-token
+    based with no cookies, so this cannot leak an authenticated session)."""
+    client, _ = api
+    desktop = {"origin": "http://tauri.localhost"}
+    pre = await client.options("/api/v1/commands", headers={
+        **desktop,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type"})
+    assert pre.status_code == 200
+    assert pre.headers["access-control-allow-origin"] == "http://tauri.localhost"
+    assert "POST" in pre.headers["access-control-allow-methods"]
+
+    res = await client.get("/api/v1/meta", headers=desktop)
+    assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+
+    foreign = {"origin": "https://evil.example"}
+    res = await client.get("/api/v1/meta", headers=foreign)
+    assert "access-control-allow-origin" not in res.headers
+    pre = await client.options("/api/v1/commands", headers={
+        **foreign, "access-control-request-method": "POST"})
+    assert pre.status_code == 400

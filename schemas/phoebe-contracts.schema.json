@@ -10,6 +10,7 @@
         "invalid_payload",
         "command_id_conflict",
         "maintenance_mode",
+        "plugin_disabled",
         "plugin_api_incompatible",
         "missing_role",
         "kind_mismatch",
@@ -167,6 +168,290 @@
       ],
       "title": "ApiErrorCode",
       "type": "string"
+    },
+    "BundleFileEntry": {
+      "additionalProperties": false,
+      "description": "One file in the archive, as declared by the manifest.",
+      "properties": {
+        "asset_type": {
+          "default": "",
+          "title": "Asset Type",
+          "type": "string"
+        },
+        "media_type": {
+          "default": "application/octet-stream",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "size_bytes",
+        "sha256"
+      ],
+      "title": "BundleFileEntry",
+      "type": "object"
+    },
+    "BundleIssue": {
+      "additionalProperties": false,
+      "description": "One preflight finding: a stable machine code + human detail.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "code",
+        "detail"
+      ],
+      "title": "BundleIssue",
+      "type": "object"
+    },
+    "BundleManifest": {
+      "additionalProperties": false,
+      "description": "``manifest.json`` — the archive's single source of truth.",
+      "properties": {
+        "assets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CalibrationAsset"
+          },
+          "title": "Assets",
+          "type": "array"
+        },
+        "bundle_format": {
+          "default": 1,
+          "title": "Bundle Format",
+          "type": "integer"
+        },
+        "contracts_version": {
+          "default": 2,
+          "title": "Contracts Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "files": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BundleFileEntry"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "name": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "source_run": {
+          "default": "",
+          "title": "Source Run",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "BundleManifest",
+      "type": "object"
+    },
+    "BundlePreflight": {
+      "additionalProperties": false,
+      "description": "Read-only import plan (lessons §6.2): what would be admitted, reused,\nor rejected — produced without extracting, importing, or touching any\ndevice.",
+      "properties": {
+        "files_verified": {
+          "default": 0,
+          "title": "Files Verified",
+          "type": "integer"
+        },
+        "issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BundleIssue"
+          },
+          "title": "Issues",
+          "type": "array"
+        },
+        "manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BundleManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExperimentProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "title": "BundlePreflight",
+      "type": "object"
+    },
+    "CalibrationAsset": {
+      "additionalProperties": false,
+      "description": "Immutable calibration artifact with provenance + applicability.",
+      "properties": {
+        "asset_id": {
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "binding": {
+          "default": "model",
+          "enum": [
+            "strict_serial",
+            "model",
+            "portable"
+          ],
+          "title": "Binding",
+          "type": "string"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "generator": {
+          "default": "",
+          "title": "Generator",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Metadata",
+          "type": "object"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "payload_path": {
+          "title": "Payload Path",
+          "type": "string"
+        },
+        "serial": {
+          "default": "",
+          "title": "Serial",
+          "type": "string"
+        },
+        "sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_run": {
+          "default": "",
+          "title": "Source Run",
+          "type": "string"
+        },
+        "vendor": {
+          "default": "",
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_id",
+        "kind",
+        "payload_path",
+        "sha256"
+      ],
+      "title": "CalibrationAsset",
+      "type": "object"
     },
     "CommandAck": {
       "additionalProperties": false,
@@ -651,6 +936,46 @@
       "title": "DeviceStatusView",
       "type": "object"
     },
+    "EnvironmentRequirement": {
+      "additionalProperties": false,
+      "description": "A logical device the profile needs — re-bound on the target machine.",
+      "properties": {
+        "binding": {
+          "default": "model",
+          "enum": [
+            "strict_serial",
+            "model",
+            "portable"
+          ],
+          "title": "Binding",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "vendor": {
+          "default": "",
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "kind"
+      ],
+      "title": "EnvironmentRequirement",
+      "type": "object"
+    },
     "ErrorCode": {
       "description": "Stable machine-readable error classes for the wire (plan §6.4).\n\nValues are part of the serialized contract — never rename them.",
       "enum": [
@@ -818,6 +1143,68 @@
         "subscriber_count"
       ],
       "title": "EventBusStats",
+      "type": "object"
+    },
+    "ExperimentProfile": {
+      "additionalProperties": false,
+      "description": "Reproducible experiment parameters for one plugin command.",
+      "properties": {
+        "calibration": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Calibration",
+          "type": "array"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        },
+        "plugin_api": {
+          "default": ">=1,<2",
+          "title": "Plugin Api",
+          "type": "string"
+        },
+        "plugin_id": {
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "profile_id": {
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "requirements": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EnvironmentRequirement"
+          },
+          "title": "Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "profile_id",
+        "plugin_id",
+        "command"
+      ],
+      "title": "ExperimentProfile",
       "type": "object"
     },
     "ImageThumbnail": {
@@ -1021,6 +1408,151 @@
       "title": "LogEvent",
       "type": "object"
     },
+    "PluginManifest": {
+      "additionalProperties": false,
+      "description": "Static facts about one plugin (``plugin.toml`` for directory plugins;\nderived from the class for builtins).",
+      "properties": {
+        "api": {
+          "default": ">=1,<2",
+          "title": "Api",
+          "type": "string"
+        },
+        "artifact_types": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Types",
+          "type": "array"
+        },
+        "commands": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "config_schema_version": {
+          "default": 1,
+          "title": "Config Schema Version",
+          "type": "integer"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "entry": {
+          "default": "",
+          "title": "Entry",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "plugin_id": {
+          "minLength": 1,
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "requires_hardware": {
+          "default": false,
+          "title": "Requires Hardware",
+          "type": "boolean"
+        },
+        "ui_hints": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Ui Hints",
+          "type": "object"
+        },
+        "version": {
+          "default": "0.0.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id"
+      ],
+      "title": "PluginManifest",
+      "type": "object"
+    },
+    "PluginStatusView": {
+      "additionalProperties": false,
+      "description": "One row of the plugin availability report (A8).",
+      "properties": {
+        "api": {
+          "default": "",
+          "title": "Api",
+          "type": "string"
+        },
+        "commands": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plugin_id": {
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "source": {
+          "default": "builtin",
+          "title": "Source",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "loaded",
+            "disabled",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "version": {
+          "default": "",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "state"
+      ],
+      "title": "PluginStatusView",
+      "type": "object"
+    },
     "ProgressEvent": {
       "additionalProperties": false,
       "properties": {
@@ -1135,6 +1667,67 @@
         "explanation"
       ],
       "title": "RecoveryReport",
+      "type": "object"
+    },
+    "RunDraft": {
+      "additionalProperties": false,
+      "description": "A profile resolved against this machine: unexecuted by definition.",
+      "properties": {
+        "admission_preview": {
+          "$ref": "#/$defs/AckCode"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "issues": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues",
+          "type": "array"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "plugin_id": {
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "profile_id": {
+          "title": "Profile Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "plugin_id",
+        "command",
+        "admission_preview"
+      ],
+      "title": "RunDraft",
       "type": "object"
     },
     "RunJournalRecord": {
@@ -1651,6 +2244,15 @@
     "ApiError": {
       "$ref": "#/$defs/ApiError"
     },
+    "BundleManifest": {
+      "$ref": "#/$defs/BundleManifest"
+    },
+    "BundlePreflight": {
+      "$ref": "#/$defs/BundlePreflight"
+    },
+    "CalibrationAsset": {
+      "$ref": "#/$defs/CalibrationAsset"
+    },
     "CommandAck": {
       "$ref": "#/$defs/CommandAck"
     },
@@ -1677,6 +2279,9 @@
     },
     "EventBusStats": {
       "$ref": "#/$defs/EventBusStats"
+    },
+    "ExperimentProfile": {
+      "$ref": "#/$defs/ExperimentProfile"
     },
     "GatewayEvent": {
       "discriminator": {
@@ -1717,6 +2322,12 @@
     "InstrumentSnapshot": {
       "$ref": "#/$defs/InstrumentSnapshot"
     },
+    "PluginManifest": {
+      "$ref": "#/$defs/PluginManifest"
+    },
+    "PluginStatusView": {
+      "$ref": "#/$defs/PluginStatusView"
+    },
     "PreviewPayload": {
       "discriminator": {
         "mapping": {
@@ -1744,6 +2355,9 @@
     },
     "RecoveryReport": {
       "$ref": "#/$defs/RecoveryReport"
+    },
+    "RunDraft": {
+      "$ref": "#/$defs/RunDraft"
     },
     "RunJournalRecord": {
       "$ref": "#/$defs/RunJournalRecord"

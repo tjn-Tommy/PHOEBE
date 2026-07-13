@@ -36,6 +36,7 @@ class AckCode(StrEnum):
     INVALID_PAYLOAD = "invalid_payload"
     COMMAND_ID_CONFLICT = "command_id_conflict"
     MAINTENANCE_MODE = "maintenance_mode"
+    PLUGIN_DISABLED = "plugin_disabled"
     PLUGIN_API_INCOMPATIBLE = "plugin_api_incompatible"
     MISSING_ROLE = "missing_role"
     KIND_MISMATCH = "kind_mismatch"

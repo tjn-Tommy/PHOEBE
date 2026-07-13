@@ -19,8 +19,8 @@ from phoebe.contracts.export import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
-from gen_ts_types import DEFAULT_OUT as TS_OUT  # noqa: E402
-from gen_ts_types import render as render_ts    # noqa: E402
+from gen_ts_types import DEFAULT_OUTS as TS_OUTS  # noqa: E402
+from gen_ts_types import render as render_ts      # noqa: E402
 
 
 def test_bundle_is_deterministic():
@@ -54,17 +54,20 @@ def test_committed_bundle_matches_contracts():
 
 
 def test_committed_ts_types_match_bundle():
-    """Fails when the bundle changed without regenerating the sample
-    consumer's types: ``python tools/gen_ts_types.py``"""
+    """Fails when the bundle changed without regenerating every TS consumer
+    (sample consumer + desktop client): ``python tools/gen_ts_types.py``"""
     bundle = json.loads((REPO_ROOT / DEFAULT_BUNDLE_PATH)
                         .read_text(encoding="utf-8"))
-    assert TS_OUT.read_text(encoding="utf-8") == render_ts(bundle), (
-        "TS types drift — run `python tools/gen_ts_types.py` and commit"
-    )
+    rendered = render_ts(bundle)
+    for out in TS_OUTS:
+        assert out.read_text(encoding="utf-8") == rendered, (
+            f"TS types drift in {out} — run `python tools/gen_ts_types.py` "
+            "and commit"
+        )
 
 
 def test_ts_types_look_like_typescript():
-    text = TS_OUT.read_text(encoding="utf-8")
+    text = TS_OUTS[0].read_text(encoding="utf-8")
     assert "export interface CommandAck {" in text
     assert "code: AckCode;" in text
     assert 'export type AckCode = "accepted"' in text

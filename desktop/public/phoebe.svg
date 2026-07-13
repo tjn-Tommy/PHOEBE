@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#g)"/>
+  <!-- stylized beam through a grating -->
+  <path d="M14 32 H30" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M30 32 L50 20 M30 32 L50 28 M30 32 L50 36 M30 32 L50 44"
+        stroke="#fff" stroke-width="2.5" stroke-linecap="round" opacity=".9"/>
+  <circle cx="30" cy="32" r="4" fill="#fff"/>
+</svg>

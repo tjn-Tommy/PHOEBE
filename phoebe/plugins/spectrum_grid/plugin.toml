@@ -1,0 +1,8 @@
+# Static manifest — same folder format as third-party plugin_dirs entries.
+plugin_id = "org.lab.spectrum_grid"
+name = "Spectrum Grid Scan"
+version = "1.0.0"
+api = ">=1,<2"
+entry = "plugin.py"
+commands = ["start_grid_scan"]
+description = "Sweep uniform SLM levels, one spectrum per point, via the declarative grid_scan primitive (refactor.md §11.2)."

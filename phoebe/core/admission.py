@@ -7,7 +7,7 @@ reason codes — never an ``_extras`` dict, never free-text classification)::
     route + payload boundary validation   (UNKNOWN_COMMAND / INVALID_PAYLOAD)
       → CommandLedger idempotency         (REPLAYED / COMMAND_ID_CONFLICT)
       → maintenance / operator policy     (MAINTENANCE_MODE)
-      → plugin API compatibility          (PLUGIN_API_INCOMPATIBLE)
+      → plugin state + API compatibility  (PLUGIN_DISABLED / PLUGIN_API_INCOMPATIBLE)
       → DI resolution                     (MISSING_ROLE / KIND_MISMATCH)
       → cached lifecycle + health age     (DEVICE_NOT_READY / HEALTH_STALE)
       → [profile/calibration binding      (CALIBRATION_EXPIRED) — Phase D+]
@@ -161,6 +161,10 @@ class AdmissionChain:
 
     def _stage_plugin_api(self, ctx: AdmissionContext) -> AdmissionDecision | None:
         assert ctx.spec is not None
+        if self._registry.is_disabled(ctx.spec.plugin_id):
+            return _reject(
+                AckCode.PLUGIN_DISABLED,
+                f"plugin {ctx.spec.plugin_id!r} is disabled by the operator")
         if ctx.spec.api_version != PLUGIN_API_VERSION:
             return _reject(
                 AckCode.PLUGIN_API_INCOMPATIBLE,

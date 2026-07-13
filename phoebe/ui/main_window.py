@@ -16,18 +16,15 @@ from typing import Any
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -41,6 +38,7 @@ from ..contracts.run import RunState
 from ..core.config import AppConfig
 from ..services import ServiceHub
 from .bridge import UiEventBridge
+from .forms import SchemaForm
 
 _ACTIVE_STATES = {RunState.QUEUED, RunState.PREPARING, RunState.RUNNING,
                   RunState.PAUSING, RunState.PAUSED, RunState.STOPPING,
@@ -80,75 +78,25 @@ class DevicePanel(QGroupBox):
         self.table.setItem(row, 5, QTableWidgetItem(detail or ""))
 
 
-class _ScanForm(QWidget):
-    """Shared OSA scan sub-form (center / span / points)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.center = QDoubleSpinBox(minimum=1.0, maximum=19_999.0,
-                                     value=778.0, decimals=3, suffix=" nm")
-        self.span = QDoubleSpinBox(minimum=0.01, maximum=1500.0, value=8.0,
-                                   decimals=3, suffix=" nm")
-        self.points = QSpinBox(minimum=11, maximum=100_001, value=501)
-        form = QFormLayout(self)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.addRow("Center", self.center)
-        form.addRow("Span", self.span)
-        form.addRow("Points", self.points)
-
-    def payload(self) -> dict[str, Any]:
-        return {"center_nm": self.center.value(), "span_nm": self.span.value(),
-                "points": self.points.value()}
-
-
-class TpaForm(QWidget):
-    command = "start_tpa_run"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.max_steps = QSpinBox(minimum=1, maximum=1_000_000, value=50)
-        self.seed = QSpinBox(minimum=0, maximum=2**31 - 1, value=0)
-        self.scan = _ScanForm()
-        form = QFormLayout(self)
-        form.addRow("Max steps", self.max_steps)
-        form.addRow("Seed", self.seed)
-        form.addRow(self.scan)
-
-    def payload(self) -> dict[str, Any]:
-        return {"max_steps": self.max_steps.value(), "seed": self.seed.value(),
-                "scan": self.scan.payload()}
-
-
-class GridForm(QWidget):
-    command = "start_grid_scan"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.levels = QLineEdit("0, 128, 256, 384, 512")
-        self.scan = _ScanForm()
-        form = QFormLayout(self)
-        form.addRow("SLM levels", self.levels)
-        form.addRow(self.scan)
-
-    def payload(self) -> dict[str, Any]:
-        levels = [float(part) for part in self.levels.text().split(",")
-                  if part.strip()]
-        return {"levels": levels, "scan": self.scan.payload()}
-
-
 class RunControlPanel(QGroupBox):
-    """Form → CommandEnvelope; run status + pause/resume/cancel built-ins."""
+    """Form → CommandEnvelope; run status + pause/resume/cancel built-ins.
+
+    Forms are **generated from each plugin's config schema** (PR D-2) — the
+    contract is the single source of defaults/ranges, so the panel can never
+    drift from the plugin again (H12)."""
 
     submit_requested = pyqtSignal(str, dict)     # (command, payload)
     builtin_requested = pyqtSignal(str)          # "pause" | "resume" | "cancel"
 
-    def __init__(self) -> None:
+    def __init__(self, services: ServiceHub) -> None:
         super().__init__("Run control")
         self.tabs = QTabWidget()
-        self.tpa_form = TpaForm()
-        self.grid_form = GridForm()
-        self.tabs.addTab(self.tpa_form, "TPA search")
-        self.tabs.addTab(self.grid_form, "Grid scan")
+        commands = services.call(services.plugins.commands()).result(timeout=10)
+        for command in commands:
+            schema = services.call(
+                services.plugins.config_schema(command)).result(timeout=10)
+            if schema is not None:
+                self.tabs.addTab(SchemaForm(command, schema), command)
 
         self.start_btn = QPushButton("Start")
         self.pause_btn = QPushButton("Pause")
@@ -369,7 +317,7 @@ class MainWindow(QMainWindow):
         self._task_id: str | None = None
 
         self.devices = DevicePanel(config)
-        self.run_control = RunControlPanel()
+        self.run_control = RunControlPanel(services)
         self.plots = PlotPanel()
         self.log = LogPanel()
         self.runs = RunsPanel(services)

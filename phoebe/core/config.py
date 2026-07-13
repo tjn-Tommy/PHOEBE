@@ -112,6 +112,9 @@ class ServerConfig(ContractModel):
 class AppConfig(ContractModel):
     instruments: tuple[InstrumentConfig, ...]
     plugin_bindings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    #: Directories scanned for plugin.toml-manifested packages (plan §6.6);
+    #: each package loads independently — failures degrade, never abort.
+    plugin_dirs: tuple[str, ...] = ()
     dispatch_policy: Literal["reject", "queue"] = "reject"
     bus_default_queue_size: Annotated[int, Field(ge=16, le=4096)] = 256
     mode: Literal["dev", "prod"] = "dev"     # dev asserts payload sizes, validates responses

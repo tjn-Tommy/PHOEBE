@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=1.26",
     "h5py>=3.10",
     "loguru>=0.7",
+    "packaging>=23",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +58,8 @@ ignore = [
 "tests/*" = ["ASYNC109", "ASYNC110", "B017"]
 # importorskip("fastapi") must run before the phoebe.server imports
 "tests/test_server_api.py" = ["E402", "ASYNC109", "ASYNC110", "B017"]
+# importorskip("PyQt5") + offscreen env must run before the Qt imports
+"tests/test_forms_qt.py" = ["E402"]
 
 [tool.importlinter]
 root_package = "phoebe"
@@ -76,6 +79,7 @@ layers = [
     "phoebe.app",
     "phoebe.services",
     "phoebe.plugins",
+    "phoebe.api",
     "phoebe.instruments",
     "phoebe.transports",
     "phoebe.domain",
@@ -98,6 +102,16 @@ forbidden_modules = [
     "phoebe.transports",
     "phoebe.ui",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Plugins speak only phoebe.api (B5; conformance suite enforces it per-module too)"
+type = "forbidden"
+source_modules = ["phoebe.plugins"]
+forbidden_modules = [
+    "phoebe.core",
+    "phoebe.transports",
+]
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "UI stays on the services surface (no direct core internals) (plan C-4)"

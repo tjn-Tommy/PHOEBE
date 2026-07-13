@@ -27,6 +27,21 @@ from .static import DEFAULT_STATIC_DIR, mount_static
 if TYPE_CHECKING:
     from ..services import ServiceHub
 
+#: Origins allowed to call /api/v1 from a browser context (E-3 clients).
+#: The desktop (Tauri) webview and the vite dev server are different origins
+#: than the API, so they need CORS; the allowlist is fixed and loopback-only.
+#: This does not weaken the ladder: auth stays header-token based (no
+#: cookies, allow_credentials stays False), so a foreign page still cannot
+#: authenticate — CORS here only lets the sanctioned local clients read
+#: their own authenticated responses.
+DESKTOP_ORIGINS = (
+    "tauri://localhost",           # Tauri webview (macOS/Linux)
+    "http://tauri.localhost",      # Tauri webview (Windows WebView2)
+    "https://tauri.localhost",
+    "http://localhost:1420",       # `pnpm dev` in desktop/
+    "http://127.0.0.1:1420",
+)
+
 
 def _app_version() -> str:
     try:
@@ -92,6 +107,16 @@ def create_app(
         redoc_url=None,
     )
     _install_error_handlers(app)
+
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(DESKTOP_ORIGINS),
+        allow_methods=["GET", "POST"],
+        allow_headers=["authorization", "content-type", "x-phoebe-token",
+                       "last-event-id"],
+        max_age=600,
+    )
 
     static_ui = mount_static(app, static_dir or DEFAULT_STATIC_DIR)
     app.include_router(build_router(

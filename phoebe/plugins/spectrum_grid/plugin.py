@@ -5,13 +5,18 @@ from __future__ import annotations
 import numpy as np
 from pydantic import Field
 
-from ..core.contracts import ContractModel
-from ..core.di import Depends
-from ..core.plugin import Plugin, on_command, register
-from ..core.sweep import ScanAxis, grid_scan
-from ..core.task_manager import RunContext
-from ..domain.spectrum import SpectrumScanConfig, TraceRequest
-from ..instruments.protocols import PatternModulator, SpectrumAnalyzer
+from ...api import (
+    ContractModel,
+    Depends,
+    PatternModulator,
+    Plugin,
+    RunContext,
+    ScanAxis,
+    SpectrumAnalyzer,
+    grid_scan,
+    on_command,
+)
+from ...domain.spectrum import SpectrumScanConfig, TraceRequest
 
 
 class GridScanConfig(ContractModel):
@@ -21,8 +26,8 @@ class GridScanConfig(ContractModel):
         center_nm=778.0, span_nm=8.0, points=501)
 
 
-@register(plugin_id="org.lab.spectrum_grid")
 class SpectrumGridPlugin(Plugin):
+    plugin_id = "org.lab.spectrum_grid"
     config_type = GridScanConfig
 
     @on_command("start_grid_scan")
